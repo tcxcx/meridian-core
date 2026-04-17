@@ -34,6 +34,9 @@ class Config:
     
     # Zep配置
     ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
+
+    # MERIDIAN: memory backend selector (zep | 0g). When != 'zep', ZEP_API_KEY is optional.
+    MEMORY_BACKEND = os.environ.get('MEMORY_BACKEND', 'zep').lower()
     
     # 文件上传配置
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
@@ -69,7 +72,9 @@ class Config:
         errors = []
         if not cls.LLM_API_KEY:
             errors.append("LLM_API_KEY 未配置")
-        if not cls.ZEP_API_KEY:
-            errors.append("ZEP_API_KEY 未配置")
+        # MERIDIAN: only require ZEP_API_KEY when MEMORY_BACKEND=zep.
+        # 0G backend (Phase 3) does not need it; baseline boots so /health works.
+        if cls.MEMORY_BACKEND == 'zep' and not cls.ZEP_API_KEY:
+            errors.append("ZEP_API_KEY 未配置 (set MEMORY_BACKEND=0g to skip)")
         return errors
 

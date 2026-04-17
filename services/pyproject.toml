@@ -1,0 +1,20 @@
+[project]
+name = "meridian-services"
+version = "0.1.0"
+description = "MERIDIAN sidecar services (signal gateway, market scanner, etc.)"
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
+    "py-clob-client>=0.20.0",
+    "openai>=1.50.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["meridian_signal"]

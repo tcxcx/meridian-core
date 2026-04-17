@@ -1,0 +1,10 @@
+# Local-only overrides for docker compose. Auto-merged at boot.
+# Keep upstream docker-compose.yml clean for rebases.
+services:
+  mirofish:
+    platform: linux/amd64
+    # Remap host 3000 (occupied by local node dev) → container 3000.
+    # !override replaces upstream port list (default merge would keep 3000:3000 bound).
+    ports: !override
+      - "3010:3000"
+      - "5001:5001"
