@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from flask import Blueprint, Flask, jsonify, request
 from flask_cors import CORS
 
-from . import _dns_fallback, polymarket, seed, swarm
+from . import _dns_fallback, polymarket, seed, swarm, zg_client
 
 _dns_fallback.install()
 
@@ -66,6 +66,21 @@ def run_signal():
         return jsonify({"error": f"market not found: {market_id}"}), 404
 
     seed_doc = seed.build_seed_document(market)
+    run_id = str(uuid.uuid4())
+
+    # Phase 3: pin seed_doc to 0G Storage (best-effort — null on failure).
+    cogito = zg_client.get_client()
+    seed_pin = None
+    if zg_client.is_enabled():
+        try:
+            seed_pin = cogito.upload(
+                kind="seed",
+                payload={"market_id": market.market_id, "slug": market.slug, "seed_doc": seed_doc},
+                meta={"run_id": run_id},
+            )
+        except zg_client.CogitoError as e:
+            log.warning("seed pin failed: %s", e)
+
     t0 = time.perf_counter()
     out = swarm.run(seed_doc=seed_doc, outcomes=market.outcomes, market_id=market.market_id)
     elapsed = time.perf_counter() - t0
@@ -78,8 +93,38 @@ def run_signal():
     edges.sort(key=lambda x: abs(x[3]), reverse=True)
     best = edges[0] if edges else None
 
+    # Phase 3: pin the simulation envelope to 0G Storage.
+    sim_pin = None
+    if zg_client.is_enabled():
+        try:
+            sim_pin = cogito.upload(
+                kind="simulation",
+                payload={
+                    "run_id": run_id,
+                    "market": {
+                        "market_id": market.market_id,
+                        "slug": market.slug,
+                        "question": market.question,
+                        "outcomes": market.outcomes,
+                        "market_prices": market.outcome_prices,
+                    },
+                    "swarm_prediction": out.swarm_prediction,
+                    "confidence": out.confidence,
+                    "reasoning": out.reasoning,
+                    "key_factors": out.key_factors,
+                    "contributing_agents": out.contributing_agents,
+                    "phase": out.phase,
+                    "model": out.model,
+                    "elapsed_s": round(elapsed, 2),
+                    "seed_hash_0g": seed_pin.root_hash if seed_pin else None,
+                },
+                meta={"run_id": run_id, "seed_hash_0g": seed_pin.root_hash if seed_pin else None},
+            )
+        except zg_client.CogitoError as e:
+            log.warning("simulation pin failed: %s", e)
+
     return jsonify({
-        "run_id": str(uuid.uuid4()),
+        "run_id": run_id,
         "market_id": market.market_id,
         "slug": market.slug,
         "question": market.question,
@@ -99,10 +144,25 @@ def run_signal():
         "phase": out.phase,
         "model": out.model,
         "elapsed_s": round(elapsed, 2),
-        # Hashes (Phase 3 will populate from 0G):
-        "seed_hash_0g": None,
-        "simulation_hash_0g": None,
+        "seed_hash_0g": seed_pin.root_hash if seed_pin else None,
+        "seed_tx_0g": seed_pin.tx_hash if seed_pin else None,
+        "simulation_hash_0g": sim_pin.root_hash if sim_pin else None,
+        "simulation_tx_0g": sim_pin.tx_hash if sim_pin else None,
     })
+
+
+@signal_bp.get("/runs/<root_hash>")
+def fetch_run(root_hash: str):
+    """Pull back a previously-pinned simulation payload from 0G by merkle root.
+
+    Demo bar (per BUILD_PLAN Phase 3): show a run → capture hash → re-read
+    the run from 0G → prove reproducibility.
+    """
+    try:
+        envelope = zg_client.get_client().download(root_hash)
+    except zg_client.CogitoError as e:
+        return jsonify({"error": str(e)}), 502
+    return jsonify(envelope)
 
 
 def create_app() -> Flask:
@@ -116,7 +176,13 @@ def create_app() -> Flask:
 
     @app.get("/health")
     def health():
-        return {"service": "MERIDIAN signal-gateway", "status": "ok", "phase": "1"}
+        zg_status = zg_client.get_client().health()
+        return {
+            "service": "MERIDIAN signal-gateway",
+            "status": "ok",
+            "phase": "3",
+            "zg_anchor": zg_status,
+        }
 
     app.register_blueprint(signal_bp)
     return app

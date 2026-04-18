@@ -1,0 +1,24 @@
+{
+  "name": "cogito",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MERIDIAN 0G anchor sidecar — pins seed + simulation payloads to 0G Storage and serves them back by merkle root.",
+  "scripts": {
+    "dev": "bun --env-file=../../.env run --watch src/index.ts",
+    "start": "bun --env-file=../../.env run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@0gfoundation/0g-ts-sdk": "^1.2.1",
+    "@0glabs/0g-serving-broker": "0.6.2",
+    "ethers": "^6.13.0",
+    "hono": "^4.12.14",
+    "openai": "^4.28.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.6.0"
+  }
+}

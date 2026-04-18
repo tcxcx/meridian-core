@@ -50,6 +50,43 @@ def _user_prompt(seed_doc: str, outcomes: list[str]) -> str:
     )
 
 
+def _chat_json(
+    *,
+    messages: list[dict[str, str]],
+    temperature: float = 0.4,
+) -> tuple[str, str]:
+    """Run a chat completion and return (raw_json_text, model_used).
+
+    Picks backend by env `LLM_PROVIDER`:
+      - "0g"      → cogito /compute/inference (DeAIOS, TeeML-verifiable)
+      - anything else (default "openai") → OpenAI-compatible endpoint
+    """
+    provider = os.environ.get("LLM_PROVIDER", "openai").lower()
+
+    if provider == "0g":
+        from . import zg_client
+
+        model = os.environ.get("COGITO_LLM_MODEL", "openai/gpt-oss-20b")
+        res = zg_client.get_client().inference(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+        )
+        return str(res.get("content") or "{}"), str(res.get("model") or model)
+
+    api_key = os.environ["LLM_API_KEY"]
+    base_url = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
+    model = os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    resp = client.chat.completions.create(
+        model=model,
+        response_format={"type": "json_object"},
+        messages=messages,
+        temperature=temperature,
+    )
+    return resp.choices[0].message.content or "{}", model
+
+
 def run_swarm_lite(
     *,
     seed_doc: str,
@@ -58,24 +95,22 @@ def run_swarm_lite(
     base_url: str | None = None,
     model: str | None = None,
 ) -> SwarmOutput:
-    api_key = api_key or os.environ["LLM_API_KEY"]
-    base_url = base_url or os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
-    model = model or os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
-
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    resp = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": _user_prompt(seed_doc, outcomes)},
-        ],
-        temperature=0.4,
-    )
-    raw = json.loads(resp.choices[0].message.content or "{}")
+    # Keyword args preserved for call-site compat, but LLM_PROVIDER=0g overrides.
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": _user_prompt(seed_doc, outcomes)},
+    ]
+    raw_text, model_used = _chat_json(messages=messages, temperature=0.4)
+    try:
+        raw = json.loads(raw_text)
+    except json.JSONDecodeError:
+        # 0G providers don't all honour response_format=json_object — scrape.
+        log.warning("chat returned non-JSON; attempting object extraction")
+        import re
+        m = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        raw = json.loads(m.group(0)) if m else {}
 
     pred = raw.get("swarm_prediction") or {}
-    # Normalise probabilities (defensive — LLMs sometimes drift)
     pred = {k: float(v) for k, v in pred.items() if isinstance(v, (int, float))}
     total = sum(pred.values()) or 1.0
     pred = {k: v / total for k, v in pred.items()}
@@ -85,8 +120,8 @@ def run_swarm_lite(
         confidence=float(raw.get("confidence", 0.5)),
         reasoning=str(raw.get("reasoning", "")),
         key_factors=[str(x) for x in (raw.get("key_factors") or [])],
-        contributing_agents=[],  # populated in Phase 2 by AXL agent IDs
-        model=model,
+        contributing_agents=[],
+        model=model_used,
     )
 
 

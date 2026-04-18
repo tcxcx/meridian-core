@@ -60,3 +60,7 @@ backend/uploads/
 data/
 # MERIDIAN: AXL mesh runtime (regenerated on each boot)
 services/swarm_runner/.runtime/
+# MERIDIAN: cogito (Bun) artifacts
+services/cogito/node_modules/
+services/cogito/dist/
+services/cogito/.bun/

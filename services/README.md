@@ -18,6 +18,13 @@ services/
 │   ├── agent.py
 │   ├── nodes.py            # supervisor for 3 axl/node processes
 │   └── orchestrator.py
+├── cogito/                 # Phase 3: Hono+Bun sidecar — 0G Storage pin/fetch +
+│                           #          0G Compute (DeAIOS) verifiable LLM inference
+│   ├── src/
+│   │   ├── index.ts        # Hono app, middleware, routes
+│   │   ├── zg.ts           # @0gfoundation/0g-ts-sdk wrapper (storage)
+│   │   └── compute.ts      # @0glabs/0g-serving-broker wrapper (compute)
+│   └── README.md
 ├── signal-gateway/         # (reserved — empty)
 ├── execution-router/       # (reserved — phase-4)
 ├── market-scanner/         # (reserved — phase-5 watcher loop)
@@ -38,9 +45,13 @@ Env (read from `meridian-core/.env`, one level up):
 
 | Var | Default | Purpose |
 |---|---|---|
-| `LLM_API_KEY` | — required — | OpenAI-format key (Phase 3 will switch to 0G Compute base URL) |
-| `LLM_BASE_URL` | `https://api.openai.com/v1` | swap for 0G in Phase 3 |
+| `LLM_API_KEY` | — required — | OpenAI-format key (ignored when `LLM_PROVIDER=0g`) |
+| `LLM_BASE_URL` | `https://api.openai.com/v1` | |
 | `LLM_MODEL_NAME` | `gpt-4o-mini` | |
+| `LLM_PROVIDER` | `openai` | `openai` = direct; `0g` = route through cogito /compute/inference |
+| `COGITO_LLM_MODEL` | `openai/gpt-oss-20b` | 0G DeAIOS model when `LLM_PROVIDER=0g` |
+| `COGITO_URL` | `http://127.0.0.1:5003` | cogito sidecar (Phase 3) |
+| `COGITO_TOKEN` | — required for 0G anchor — | shared bearer token |
 | `SIGNAL_GATEWAY_PORT` | `5002` | |
 | `SWARM_BACKEND` | `lite` | `lite` = single-LLM (Phase 1); `axl` = 3-node Gensyn AXL mesh (Phase 2) |
 | `SWARM_AGENTS_PER_NODE` | `5` | only used when `SWARM_BACKEND=axl` |
@@ -95,7 +106,9 @@ Response shape (stable across phases — only the `phase` field and the populate
   "model": "gpt-4o-mini",
   "elapsed_s": 3.76,
   "seed_hash_0g": null,
-  "simulation_hash_0g": null
+  "seed_tx_0g": null,
+  "simulation_hash_0g": null,
+  "simulation_tx_0g": null
 }
 ```
 
@@ -107,7 +120,7 @@ Response shape (stable across phases — only the `phase` field and the populate
 |---|---|
 | 1 ✓ | Single-LLM swarm-lite, no on-chain anchors |
 | 2 ✓ | Multi-agent gossip via 3-node Gensyn AXL mesh; `SWARM_BACKEND=axl` toggles it. See `swarm_runner/README.md` |
-| 3 | Point `LLM_BASE_URL` at 0G Compute Broker; populate `seed_hash_0g` + `simulation_hash_0g` from 0G Storage uploads |
+| 3 ✓ | cogito sidecar pins seed + simulation to 0G Storage (populates `*_hash_0g`) and optionally routes LLM through 0G Compute (`LLM_PROVIDER=0g`). See `cogito/README.md`. Graceful fallback to `null` if cogito is down. |
 | 4 | Add `POST /api/signal/execute { signal }` → calls `execution-router/` (burner wallets + KeeperHub) |
 | 5 | Add `services/orchestrator/` autonomous loop that polls scan → run → execute |
 
