@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import random
+import threading
 import time
 from dataclasses import dataclass
 
@@ -27,6 +28,48 @@ from openai import OpenAI
 from .axl_client import PROTO_VERSION, MSG_TYPE_BELIEF, AxlClient, Belief
 
 log = logging.getLogger("meridian.swarm.agent")
+
+
+class NodeInbox:
+    """Per-node shared cache around AxlClient.drain().
+
+    AXL's /recv pops a message exactly once. With N agents per node calling
+    drain() concurrently, the first agent grabs everything and the rest see
+    nothing. Wrapping drain() in a node-scoped cache lets all agents on the
+    same node observe every belief that crossed the mesh.
+    """
+
+    def __init__(self, axl: AxlClient) -> None:
+        self._axl = axl
+        self._lock = threading.Lock()
+        self._cache: list[Belief] = []
+
+    def drain_all(self) -> list[Belief]:
+        """Pull anything new from /recv into the cache, then return the cache."""
+        with self._lock:
+            new = self._axl.drain()
+            if new:
+                self._cache.extend(new)
+            return list(self._cache)
+
+
+_NODE_INBOXES: dict[str, NodeInbox] = {}
+_INBOX_LOCK = threading.Lock()
+
+
+def _inbox_for(api_url: str, known_peers: list[str]) -> NodeInbox:
+    with _INBOX_LOCK:
+        ib = _NODE_INBOXES.get(api_url)
+        if ib is None:
+            ib = NodeInbox(AxlClient(api_url=api_url, known_peers=known_peers))
+            _NODE_INBOXES[api_url] = ib
+        return ib
+
+
+def reset_inboxes() -> None:
+    """Clear the per-node cache. Call between independent swarm runs."""
+    with _INBOX_LOCK:
+        _NODE_INBOXES.clear()
 
 _PERSONAS = [
     "a contrarian quant who shorts narrative trades",
@@ -109,6 +152,7 @@ class AgentSpec:
     node_index: int      # 0,1,2 — only for persona spread
     api_url: str         # local AXL node API
     node_pubkey: str     # this node's AXL public key
+    peer_pubkeys: list[str] = None  # other nodes' pubkeys for guaranteed delivery
 
 
 def run_agent(
@@ -128,16 +172,20 @@ def run_agent(
     llm_base_url = llm_base_url or os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
     llm_model = llm_model or os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
 
-    axl = AxlClient(api_url=spec.api_url)
+    axl = AxlClient(api_url=spec.api_url, known_peers=spec.peer_pubkeys or [])
+    inbox = _inbox_for(spec.api_url, spec.peer_pubkeys or [])
     persona = _persona(spec.node_index * 7 + int(spec.agent_id.rsplit("-", 1)[-1]))
-    accumulated_peers: list[Belief] = []
     last_belief: Belief | None = None
 
     for r in range(1, rounds + 1):
-        # 1. catch up on what peers have said since last drain
-        accumulated_peers.extend(axl.drain())
-        # only consider beliefs about THIS market
-        market_peers = [b for b in accumulated_peers if b.market_id == market_id]
+        # 1. read shared per-node cache (every agent on this node sees the
+        #    same beliefs — AXL's /recv is one-shot per node).
+        accumulated = inbox.drain_all()
+        # only consider beliefs about THIS market, and not our own
+        market_peers = [
+            b for b in accumulated
+            if b.market_id == market_id and b.agent_id != spec.agent_id
+        ]
 
         # 2. forecast (with whatever peer context we have)
         probs, conf, reasoning = _llm_forecast(
@@ -179,6 +227,6 @@ def run_agent(
             #    Add a tiny jitter so all agents don't drain at the same instant.
             time.sleep(gossip_window_s + random.uniform(0, 0.5))
 
-    # final drain so the orchestrator can audit who we heard from
-    accumulated_peers.extend(axl.drain())
+    # final drain into the shared cache so the orchestrator can audit
+    inbox.drain_all()
     return last_belief  # type: ignore[return-value]

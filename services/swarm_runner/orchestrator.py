@@ -14,7 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from .agent import AgentSpec, run_agent
+from .agent import AgentSpec, reset_inboxes, run_agent
 from .axl_client import AxlClient, Belief
 from .nodes import NodeMesh, RunningNode
 
@@ -91,16 +91,20 @@ def run_axl_swarm(
     nodes: list[RunningNode] = mesh.start() if own_mesh else mesh.running
     if not nodes:
         raise RuntimeError("mesh has no running nodes")
+    reset_inboxes()  # fresh per-node belief caches
 
     t0 = time.perf_counter()
+    all_pubs = [n.public_key for n in nodes]
     specs: list[AgentSpec] = []
     for ni, node in enumerate(nodes):
+        peer_pubs = [p for p in all_pubs if p != node.public_key]
         for ai in range(agents_per_node):
             specs.append(AgentSpec(
                 agent_id=f"node-{node.spec.name}/agent-{ai}",
                 node_index=ni,
                 api_url=node.api_url,
                 node_pubkey=node.public_key,
+                peer_pubkeys=peer_pubs,
             ))
 
     log.info(

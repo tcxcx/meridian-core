@@ -102,6 +102,14 @@ def _post(url: str, data: bytes, headers: dict, timeout: int = 10) -> tuple[int,
 @dataclass
 class AxlClient:
     api_url: str = "http://127.0.0.1:9002"
+    known_peers: list[str] = field(default_factory=list)
+    """Optional: pubkeys we want to reach regardless of local topology view.
+
+    Yggdrasil routes by pubkey via the spanning tree, but a node's *local*
+    /topology may not yet include every reachable peer (spokes lag the hub).
+    Passing the full roster here lets us broadcast to the whole mesh on
+    round 1 instead of waiting for tree convergence.
+    """
     _our_id: Optional[str] = field(default=None, repr=False)
 
     def topology(self) -> Optional[dict]:
@@ -121,7 +129,10 @@ class AxlClient:
         return self._our_id
 
     def all_peer_ids(self) -> list[str]:
-        """Direct peers + everyone in the spanning tree, minus ourselves."""
+        """Union of (a) direct peers, (b) tree members, (c) injected known_peers,
+        minus ourselves. (c) is what guarantees cross-node delivery before the
+        Yggdrasil spanning tree converges.
+        """
         t = self.topology() or {}
         our = t.get("our_public_key", "")
         ids: set[str] = set()
@@ -131,6 +142,7 @@ class AxlClient:
         for n in t.get("tree", []) or []:
             if n.get("public_key"):
                 ids.add(n["public_key"])
+        ids.update(self.known_peers)
         ids.discard(our)
         return sorted(ids)
 
