@@ -13,8 +13,12 @@ services/
 │   ├── seed.py             # build seed document for swarm
 │   ├── swarm.py            # Phase 1 single-LLM stand-in (Phase 2 → AXL multi-agent)
 │   └── _dns_fallback.py    # socket.getaddrinfo monkey-patch for hosts the LAN resolver NXDOMAINs
-├── signal-gateway/         # (reserved — phase-2 multi-process gateway, currently empty)
-├── swarm-runner/           # (reserved — phase-2 AXL agents)
+├── swarm_runner/           # Phase 2: 3-node Gensyn AXL mesh + N agents per node
+│   ├── axl_client.py
+│   ├── agent.py
+│   ├── nodes.py            # supervisor for 3 axl/node processes
+│   └── orchestrator.py
+├── signal-gateway/         # (reserved — empty)
 ├── execution-router/       # (reserved — phase-4)
 ├── market-scanner/         # (reserved — phase-5 watcher loop)
 └── fund-state/             # (reserved — phase-4 burner-wallet ledger)
@@ -38,6 +42,9 @@ Env (read from `meridian-core/.env`, one level up):
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | swap for 0G in Phase 3 |
 | `LLM_MODEL_NAME` | `gpt-4o-mini` | |
 | `SIGNAL_GATEWAY_PORT` | `5002` | |
+| `SWARM_BACKEND` | `lite` | `lite` = single-LLM (Phase 1); `axl` = 3-node Gensyn AXL mesh (Phase 2) |
+| `SWARM_AGENTS_PER_NODE` | `5` | only used when `SWARM_BACKEND=axl` |
+| `SWARM_ROUNDS` | `2` | only used when `SWARM_BACKEND=axl` |
 
 ## Endpoints
 
@@ -99,7 +106,7 @@ Response shape (stable across phases — only the `phase` field and the populate
 | Phase | What changes here |
 |---|---|
 | 1 ✓ | Single-LLM swarm-lite, no on-chain anchors |
-| 2 | Replace `swarm.py` body with multi-agent gossip via AXL; populate `contributing_agents` with AXL agent IDs |
+| 2 ✓ | Multi-agent gossip via 3-node Gensyn AXL mesh; `SWARM_BACKEND=axl` toggles it. See `swarm_runner/README.md` |
 | 3 | Point `LLM_BASE_URL` at 0G Compute Broker; populate `seed_hash_0g` + `simulation_hash_0g` from 0G Storage uploads |
 | 4 | Add `POST /api/signal/execute { signal }` → calls `execution-router/` (burner wallets + KeeperHub) |
 | 5 | Add `services/orchestrator/` autonomous loop that polls scan → run → execute |

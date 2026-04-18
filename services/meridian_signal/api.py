@@ -67,7 +67,7 @@ def run_signal():
 
     seed_doc = seed.build_seed_document(market)
     t0 = time.perf_counter()
-    out = swarm.run_swarm_lite(seed_doc=seed_doc, outcomes=market.outcomes)
+    out = swarm.run(seed_doc=seed_doc, outcomes=market.outcomes, market_id=market.market_id)
     elapsed = time.perf_counter() - t0
 
     # Edge: pick the outcome where swarm probability deviates most from market price.

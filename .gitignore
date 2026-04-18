@@ -58,3 +58,5 @@ backend/uploads/
 
 # Docker 数据
 data/
+# MERIDIAN: AXL mesh runtime (regenerated on each boot)
+services/swarm_runner/.runtime/

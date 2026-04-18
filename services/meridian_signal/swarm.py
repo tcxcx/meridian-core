@@ -1,15 +1,21 @@
-"""Phase 1 swarm-lite: single-LLM stand-in for the full multi-agent swarm.
+"""Swarm dispatcher.
 
-The HTTP contract returned here is the same one Phase 2 (AXL multi-agent) and
-Phase 3 (0G inference) will produce — only the *implementation* changes.
+Phase 1: single-LLM stand-in (`run_swarm_lite`).
+Phase 2: multi-agent gossip across 3 AXL nodes (`run_swarm_axl`).
+
+The HTTP contract returned by both is identical — only `phase` and
+`contributing_agents` differ. Pick by env: `SWARM_BACKEND=lite|axl`.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass
 
 from openai import OpenAI
+
+log = logging.getLogger("meridian.swarm")
 
 
 @dataclass
@@ -18,7 +24,7 @@ class SwarmOutput:
     confidence: float                    # 0..1, swarm consensus strength
     reasoning: str                       # one paragraph
     key_factors: list[str]               # 3-6 bullets
-    contributing_agents: list[str]       # placeholder until Phase 2 (AXL agents)
+    contributing_agents: list[str]       # AXL agent IDs in Phase 2; [] in Phase 1
     model: str
     phase: str = "1-swarm-lite"
 
@@ -82,6 +88,56 @@ def run_swarm_lite(
         contributing_agents=[],  # populated in Phase 2 by AXL agent IDs
         model=model,
     )
+
+
+def run_swarm_axl(
+    *,
+    seed_doc: str,
+    market_id: str,
+    outcomes: list[str],
+    agents_per_node: int | None = None,
+    rounds: int | None = None,
+) -> SwarmOutput:
+    """Phase 2: multi-agent gossip across 3 AXL nodes.
+
+    Imports lazily so a Phase 1 deployment without `swarm_runner` installed
+    still works for `run_swarm_lite`.
+    """
+    from swarm_runner.orchestrator import run_axl_swarm  # type: ignore
+
+    apn = agents_per_node or int(os.environ.get("SWARM_AGENTS_PER_NODE", "5"))
+    rds = rounds or int(os.environ.get("SWARM_ROUNDS", "2"))
+    result = run_axl_swarm(
+        seed_doc=seed_doc,
+        market_id=market_id,
+        outcomes=outcomes,
+        agents_per_node=apn,
+        rounds=rds,
+    )
+    return SwarmOutput(
+        swarm_prediction=result.consensus,
+        confidence=result.confidence,
+        reasoning=result.reasoning,
+        key_factors=result.key_factors,
+        contributing_agents=result.contributing_agents,
+        model=os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini"),
+        phase=f"2-axl-mesh ({len(result.node_keys)}-node, {result.raw_beliefs} beliefs)",
+    )
+
+
+def run(
+    *,
+    seed_doc: str,
+    outcomes: list[str],
+    market_id: str | None = None,
+) -> SwarmOutput:
+    """Dispatch to the configured backend (`SWARM_BACKEND=lite|axl`, default lite)."""
+    backend = os.environ.get("SWARM_BACKEND", "lite").lower()
+    if backend == "axl":
+        if not market_id:
+            raise ValueError("market_id required for SWARM_BACKEND=axl")
+        return run_swarm_axl(seed_doc=seed_doc, market_id=market_id, outcomes=outcomes)
+    return run_swarm_lite(seed_doc=seed_doc, outcomes=outcomes)
 
 
 def to_dict(out: SwarmOutput) -> dict:
