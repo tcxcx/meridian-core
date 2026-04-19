@@ -127,3 +127,32 @@ def get_orderbook_midprice(token_id: str) -> float | None:
         data = resp.json()
         mid = data.get("mid") if isinstance(data, dict) else None
         return _to_float(mid) if mid is not None else None
+
+
+def get_orderbook(token_id: str) -> dict | None:
+    """Fetch the full CLOB orderbook for a single outcome token.
+
+    Returns a dict shaped { 'bids': [{'price','size'},...], 'asks': [...] }
+    with prices/sizes as floats. None on failure.
+    """
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.get(f"{CLOB_HOST}/book", params={"token_id": token_id})
+        if resp.status_code != 200:
+            return None
+        try:
+            raw = resp.json()
+        except ValueError:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    bids = [
+        {"price": _to_float(r.get("price")), "size": _to_float(r.get("size"))}
+        for r in (raw.get("bids") or [])
+        if isinstance(r, dict)
+    ]
+    asks = [
+        {"price": _to_float(r.get("price")), "size": _to_float(r.get("size"))}
+        for r in (raw.get("asks") or [])
+        if isinstance(r, dict)
+    ]
+    return {"bids": bids, "asks": asks}

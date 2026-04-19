@@ -162,6 +162,46 @@
   .badge.s-settled { background: var(--blu); color: #fff; }
   .badge.s-failed { background: var(--dn); color: #fff; border-color: var(--dn); }
 
+  /* signal instruments — compact strip between INTEL and DELIBERATION */
+  .instr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+  .instr-cell {
+    padding: 10px 14px; border-right: 1px solid var(--blu);
+    display: flex; flex-direction: column; gap: 8px; min-height: 0;
+  }
+  .instr-cell:last-child { border-right: none; }
+  .instr-h {
+    display: flex; align-items: baseline; gap: 8px;
+    padding-bottom: 4px; border-bottom: 1px dashed var(--gry-2);
+  }
+  .instr-h .instr-code { font-size: 10px; color: var(--blu); letter-spacing: 0.12em; font-weight: 700; }
+  .instr-h .instr-name { font-size: 11px; color: var(--fg); letter-spacing: 0.14em; font-weight: 700; }
+  .instr-h .instr-sub  { font-size: 10px; color: var(--gry); margin-left: auto; letter-spacing: 0.04em; }
+
+  .entropy-readout { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: center; }
+  .entropy-readout .big { font-size: 44px; line-height: 1; color: var(--blu); font-weight: 500; letter-spacing: -0.02em; }
+  .entropy-readout .big-label { font-size: 10px; color: var(--gry); letter-spacing: 0.18em; margin-top: 4px; }
+  .entropy-readout .meta-kv { width: 100%; font-size: 10.5px; }
+  .entropy-readout .meta-kv td { padding: 2px 0; border-bottom: 1px dashed var(--gry-2); }
+  .entropy-readout .meta-kv td:first-child { color: var(--gry); letter-spacing: 0.06em; padding-right: 8px; }
+  .entropy-readout .meta-kv td:last-child  { text-align: right; color: var(--fg); font-weight: 700; }
+
+  .cryo-mini { font-size: 10.5px; max-height: 220px; overflow: auto; }
+  .cryo-mini-row {
+    display: grid; grid-template-columns: 1fr 48px 56px 76px;
+    gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--gry-2);
+    cursor: pointer; align-items: center;
+  }
+  .cryo-mini-row:hover { background: var(--gry-3); }
+  .cryo-mini-row .q {
+    font-weight: 700; color: var(--fg);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .cryo-mini-row .h { color: var(--blu); text-align: right; font-weight: 700; }
+  .cryo-mini-row .z { color: var(--gry); text-align: right; font-size: 10px; }
+  .cryo-mini-row.row-t2 .q::before { content: '▌ '; color: var(--blu); }
+  .cryo-mini-row.row-t1 .q::before { content: '▍ '; color: var(--blu); }
+  .cryo-empty { color: var(--gry); font-size: 11px; padding: 8px 0; }
+
   /* execution history: collapsed by default */
   .pos-history-h {
     padding: 8px 12px; border-top: 1px solid var(--blu); background: var(--gry-3);
@@ -221,11 +261,11 @@
     <div class="side-section">
       <div class="side-h">SIGNAL INSTRUMENTS</div>
       <ul class="tools">
-        <li class="tool tool-off" title="not yet wired"><div class="tool-row">
-          <span class="tool-code">E-01</span><span class="tool-name">ENTROPY</span><span class="tool-dot off">●</span>
+        <li class="tool" id="nav-instr-e01"><div class="tool-row">
+          <span class="tool-code">E-01</span><span class="tool-name">ENTROPY</span><span class="tool-dot">●</span>
         </div><div class="tool-desc">orderbook entropy gauge</div></li>
-        <li class="tool tool-off" title="not yet wired"><div class="tool-row">
-          <span class="tool-code">C-02</span><span class="tool-name">CRYO</span><span class="tool-dot off">●</span>
+        <li class="tool" id="nav-instr-c02"><div class="tool-row">
+          <span class="tool-code">C-02</span><span class="tool-name">CRYO</span><span class="tool-dot">●</span>
         </div><div class="tool-desc">frozen-market scanner</div></li>
         <li class="tool tool-off" title="not yet wired"><div class="tool-row">
           <span class="tool-code">T-03</span><span class="tool-name">TOPOLOGY</span><span class="tool-dot off">●</span>
@@ -285,6 +325,36 @@
             <span class="val" id="posture-payout">$0.00</span>
           </div>
           <a class="posture-cta" href="#act-3">JUMP TO EXECUTION ↓</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── INSTRUMENTS · E-01 ENTROPY × C-02 CRYO ─── -->
+    <section class="card" id="instruments">
+      <div class="card-h">
+        <span><span class="act-chip">∗</span>SIGNAL INSTRUMENTS · E-01 ENTROPY × C-02 CRYO</span>
+        <span class="card-h-r" id="instr-status">scanning…</span>
+      </div>
+      <div class="instr-grid">
+        <div class="instr-cell">
+          <div class="instr-h">
+            <span class="instr-code">E-01</span>
+            <span class="instr-name">ENTROPY</span>
+            <span class="instr-sub" id="entropy-target">— select market —</span>
+          </div>
+          <div id="entropy-body">
+            <div class="delib-empty">pick a market in <kbd>INTEL</kbd> to read its CLOB entropy</div>
+          </div>
+        </div>
+        <div class="instr-cell">
+          <div class="instr-h">
+            <span class="instr-code">C-02</span>
+            <span class="instr-name">CRYO</span>
+            <span class="instr-sub" id="cryo-meta">—</span>
+          </div>
+          <div id="cryo-body">
+            <div class="delib-empty">cryo scan loads on boot</div>
+          </div>
         </div>
       </div>
     </section>
@@ -539,6 +609,7 @@ function selectMarket(marketId) {
   // Reset DELIBERATION pane and scroll there. The whole point of the
   // journey layout is that selecting a market hands off intent to act 2.
   renderDeliberationIdle();
+  refreshEntropyForSelected();
   document.getElementById('act-2').scrollIntoView({ behavior: 'smooth', block: 'start' });
   setActIndicator('nav-act-2');
 }
@@ -1000,6 +1071,126 @@ document.getElementById('hist-toggle').addEventListener('click', () => {
   b.classList.toggle('open');
 });
 
+/* ─────────────────────────────────────────────────────────────
+ *  INSTRUMENTS — E-01 entropy + C-02 cryo
+ *  E-01 reads the CLOB book on the currently-selected market,
+ *  refreshes every 5s. C-02 is a stand-alone scanner; clicking
+ *  a row folds the market into scannedMarkets and selects it
+ *  so the operator can keep going through ACT 2 / ACT 3.
+ * ────────────────────────────────────────────────────────────*/
+let entropyTimer = null;
+let cryoTimer = null;
+
+function tierBadge(t) {
+  if (t === 2) return `<span class="tier tier-2">◆ TIER 2</span>`;
+  if (t === 1) return `<span class="tier tier-1">◆ TIER 1</span>`;
+  return `<span class="tier tier-0">━ ACTIVE</span>`;
+}
+
+async function refreshEntropyForSelected() {
+  const body = document.getElementById('entropy-body');
+  const target = document.getElementById('entropy-target');
+  if (!selectedMarket) {
+    target.textContent = '— select market —';
+    body.innerHTML = `<div class="delib-empty">pick a market in <kbd>INTEL</kbd> to read its CLOB entropy</div>`;
+    return;
+  }
+  const token = (selectedMarket.token_ids || [])[0];
+  if (!token) {
+    target.textContent = `${shorten(selectedMarket.market_id, 10)} · no token_ids`;
+    body.innerHTML = `<div class="delib-empty">market has no CLOB token ids</div>`;
+    return;
+  }
+  const outcome = (selectedMarket.outcomes || [])[0] || 'YES';
+  target.textContent = `${escapeHtml(outcome)} · ${shorten(token, 10)}`;
+  try {
+    const r = await fetch(`${SIGNAL}/api/signal/entropy?token_id=${encodeURIComponent(token)}`, { mode: 'cors' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    body.innerHTML = `
+      <div class="entropy-readout">
+        <div>
+          <div class="big">${(j.h_bits ?? 0).toFixed(2)}</div>
+          <div class="big-label">H · BITS</div>
+          <div style="margin-top:6px;">${tierBadge(j.tier ?? 0)}</div>
+        </div>
+        <table class="meta-kv">
+          <tr><td>LEVELS</td><td>${j.levels ?? 0}</td></tr>
+          <tr><td>TOTAL SZ</td><td>${Math.round(j.total_size ?? 0).toLocaleString()}</td></tr>
+          <tr><td>BID / ASK</td><td>${Math.round(j.bid_depth ?? 0).toLocaleString()} / ${Math.round(j.ask_depth ?? 0).toLocaleString()}</td></tr>
+          <tr><td>SPREAD</td><td>${j.spread_bps != null ? j.spread_bps.toFixed(1) + ' bps' : '—'}</td></tr>
+          <tr><td>MID</td><td>${j.mid != null ? (j.mid * 100).toFixed(1) + '¢' : '—'}</td></tr>
+        </table>
+      </div>`;
+  } catch (e) {
+    body.innerHTML = `<div class="delib-empty" style="color:var(--dn)">entropy read failed: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function refreshCryo() {
+  const body = document.getElementById('cryo-body');
+  const meta = document.getElementById('cryo-meta');
+  const status = document.getElementById('instr-status');
+  try {
+    const r = await fetch(`${SIGNAL}/api/signal/cryo?limit=10&min_liquidity_usd=5000`, { mode: 'cors' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    const rows = j.rows || [];
+    const counts = j.tier_counts || {};
+    meta.textContent  = `T1=${counts.tier_1 || 0} · T2=${counts.tier_2 || 0} · LATCH ${j.latched || 0}`;
+    status.textContent = `cryo OK · ${rows.length} scanned · ${j.latched || 0} latched`;
+    if (!rows.length) {
+      body.innerHTML = `<div class="cryo-empty">no markets returned</div>`;
+      return;
+    }
+    body.innerHTML = `<div class="cryo-mini">` + rows.map(row => {
+      const cls = row.tier === 2 ? 'row-t2' : (row.tier === 1 ? 'row-t1' : '');
+      const z = row.z_score != null ? `z=${row.z_score.toFixed(2)}` : 'cold-start';
+      return `<div class="cryo-mini-row ${cls}" data-id="${row.market_id}">
+        <span class="q" title="${escapeHtml(row.question)}">${escapeHtml(row.question)}</span>
+        <span class="h">${row.h_bits.toFixed(2)}</span>
+        <span class="z">${z}</span>
+        <span>${tierBadge(row.tier)}</span>
+      </div>`;
+    }).join('') + `</div>`;
+    body.querySelectorAll('.cryo-mini-row').forEach(el => {
+      el.addEventListener('click', () => {
+        const id = el.dataset.id;
+        // C-02 returns its own scan, distinct from /markets/scan. Fold the
+        // hit into scannedMarkets so selectMarket() / verdict / open all
+        // work without forcing the operator to click SCAN MARKETS again.
+        if (!scannedMarkets.has(id)) {
+          const cr = rows.find(r => r.market_id === id);
+          if (cr) {
+            scannedMarkets.set(id, {
+              market_id: id, slug: cr.slug, question: cr.question,
+              outcomes: [cr.outcome], token_ids: [cr.token_id],
+              outcome_prices: [cr.mid || 0],
+              liquidity_usd: cr.liquidity_usd, volume_usd: cr.volume_usd,
+            });
+          }
+        }
+        selectMarket(id);
+        pushAlert(`cryo → selected ${shorten(id, 10)}`, 1);
+      });
+    });
+  } catch (e) {
+    status.textContent = 'cryo ERR';
+    body.innerHTML = `<div class="cryo-empty" style="color:var(--dn)">cryo scan failed: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function startInstruments() {
+  refreshCryo();
+  refreshEntropyForSelected();
+  if (cryoTimer)    clearInterval(cryoTimer);
+  if (entropyTimer) clearInterval(entropyTimer);
+  // Cryo z-score history thickens with every scan, so we want it polling
+  // even when no operator is looking. Entropy only matters per-selection.
+  cryoTimer    = setInterval(refreshCryo, 15000);
+  entropyTimer = setInterval(refreshEntropyForSelected, 5000);
+}
+
 // ── boot ──
 document.getElementById('btn-scan').addEventListener('click', scanMarkets);
 window.addEventListener('scroll', refreshActIndicator, { passive: true });
@@ -1007,6 +1198,7 @@ window.addEventListener('resize', refreshActIndicator);
 refreshActIndicator();
 refreshHealth(); setInterval(refreshHealth, 8000);
 openPositionStream();
+startInstruments();
 pushAlert('terminal online', 2);
 </script>
 </body>

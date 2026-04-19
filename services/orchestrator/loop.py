@@ -114,7 +114,7 @@ class Orchestrator:
 
             edge = run.get("edge") or {}
             edge_pp = float(edge.get("edge_pp") or 0.0)
-            confidence = float(run.get("confidence") or 0.0)
+            confidence = float(run.get("confidence_adjusted") or run.get("confidence") or 0.0)
 
             if abs(edge_pp) < self.cfg.min_edge_pp or confidence < self.cfg.min_confidence:
                 summary["skipped"].append({
