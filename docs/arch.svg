@@ -1,0 +1,223 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 880" font-family="JetBrains Mono, ui-monospace, Menlo, monospace" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0000ff"/>
+    </marker>
+    <marker id="arrW" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#fff"/>
+    </marker>
+  </defs>
+
+  <style>
+    .blu { fill:#0000ff; }
+    .bg-blu { fill:#0000ff; }
+    .bg-soft { fill:#e6e6ff; }
+    .bg-white { fill:#fff; }
+    .stroke-blu { stroke:#0000ff; stroke-width:1.5; fill:none; }
+    .stroke-blu-2 { stroke:#0000ff; stroke-width:2; fill:none; }
+    .stroke-dash { stroke:#0000ff; stroke-width:1; stroke-dasharray:4 4; fill:none; }
+    .gry { fill:#777; }
+    .lbl { font-size:9px; letter-spacing:0.18em; fill:#777; font-weight:700; }
+    .h1 { font-size:13px; font-weight:700; letter-spacing:0.04em; }
+    .h2 { font-size:11px; font-weight:700; }
+    .meta { font-size:10px; fill:#444; }
+    .meta-blu { font-size:10px; fill:#0000ff; font-weight:700; }
+    .meta-w { font-size:10px; fill:#fff; }
+    .pill { font-size:9px; font-weight:700; letter-spacing:0.16em; }
+    text { dominant-baseline: middle; }
+  </style>
+
+  <!-- ─── frame + title ─── -->
+  <rect x="0" y="0" width="1280" height="880" fill="#fff"/>
+  <rect x="0" y="0" width="1280" height="44" class="bg-blu"/>
+  <text x="20" y="22" class="meta-w" font-weight="700" letter-spacing="0.1em">MIROSHARK</text>
+  <text x="120" y="22" class="meta-w" letter-spacing="0.1em">CONFIDENTIAL AUTONOMOUS PREDICTION-MARKET HEDGE FUND</text>
+  <text x="1260" y="22" class="meta-w" text-anchor="end" letter-spacing="0.1em">SYSTEM ARCHITECTURE · v0.5b</text>
+
+  <!-- ============================================================ -->
+  <!-- ACT 1 · INTEL                                                -->
+  <!-- ============================================================ -->
+  <text x="20" y="72" class="lbl">ACT 1 · INTEL</text>
+  <line x1="20" y1="80" x2="1260" y2="80" class="stroke-dash"/>
+
+  <!-- Polymarket source -->
+  <rect x="40" y="100" width="200" height="74" class="bg-white stroke-blu"/>
+  <text x="50" y="118" class="h1" fill="#0000ff">POLYMARKET CLOB</text>
+  <text x="50" y="138" class="meta">live markets · prices · liquidity</text>
+  <text x="50" y="156" class="meta gry">venue · polygon-native</text>
+
+  <!-- arrow to signal-gateway -->
+  <line x1="240" y1="137" x2="320" y2="137" class="stroke-blu-2" marker-end="url(#arr)"/>
+  <text x="280" y="125" class="lbl" text-anchor="middle">REST</text>
+
+  <!-- meridian_signal -->
+  <rect x="320" y="100" width="220" height="74" class="bg-soft stroke-blu"/>
+  <text x="332" y="118" class="h1" fill="#0000ff">SIGNAL GATEWAY</text>
+  <text x="332" y="138" class="meta">/markets/scan · /run · /runs/stream</text>
+  <text x="332" y="156" class="meta gry">flask :5002 · python · cors *</text>
+
+  <!-- ============================================================ -->
+  <!-- ACT 2 · DELIBERATION                                          -->
+  <!-- ============================================================ -->
+  <text x="20" y="220" class="lbl">ACT 2 · DELIBERATION</text>
+  <line x1="20" y1="228" x2="1260" y2="228" class="stroke-dash"/>
+
+  <!-- swarm runner (gensyn axl) -->
+  <rect x="40" y="248" width="320" height="120" class="bg-white stroke-blu"/>
+  <text x="52" y="266" class="h1" fill="#0000ff">SWARM RUNNER</text>
+  <text x="52" y="284" class="meta">SWARM_BACKEND=axl · 3 nodes × N agents</text>
+  <rect x="52" y="298" width="60" height="18" class="bg-blu"/><text x="82" y="307" class="pill" fill="#fff" text-anchor="middle">GENSYN</text>
+  <rect x="120" y="298" width="46" height="18" class="bg-white stroke-blu"/><text x="143" y="307" class="pill" fill="#0000ff" text-anchor="middle">AXL</text>
+  <text x="52" y="338" class="meta">multi-round belief debate · weighted consensus</text>
+  <text x="52" y="354" class="meta gry">fallback: SWARM_BACKEND=lite (single-process)</text>
+
+  <!-- cogito sidecar -->
+  <rect x="400" y="248" width="320" height="120" class="bg-white stroke-blu"/>
+  <text x="412" y="266" class="h1" fill="#0000ff">COGITO SIDECAR</text>
+  <text x="412" y="284" class="meta">hono + bun · 127.0.0.1:5003 · bearer auth</text>
+  <rect x="412" y="298" width="86" height="18" class="bg-white stroke-blu"/><text x="455" y="307" class="pill" fill="#0000ff" text-anchor="middle">/COMPUTE</text>
+  <rect x="504" y="298" width="86" height="18" class="bg-white stroke-blu"/><text x="547" y="307" class="pill" fill="#0000ff" text-anchor="middle">/STORAGE</text>
+  <rect x="596" y="298" width="86" height="18" class="bg-white stroke-blu"/><text x="639" y="307" class="pill" fill="#0000ff" text-anchor="middle">/FHE</text>
+  <text x="412" y="338" class="meta">wraps TS-only sdks for the python services</text>
+  <text x="412" y="354" class="meta gry">graceful degrade when sidecar is down</text>
+
+  <!-- 0G stack -->
+  <rect x="760" y="248" width="220" height="120" class="bg-soft stroke-blu"/>
+  <text x="772" y="266" class="h1" fill="#0000ff">0G GALILEO</text>
+  <text x="772" y="284" class="meta">storage anchor + teeml compute</text>
+  <text x="772" y="302" class="meta-blu">seed_hash_0g</text>
+  <text x="772" y="318" class="meta-blu">simulation_hash_0g</text>
+  <text x="772" y="338" class="meta">attestation_envelope · provider · sig</text>
+  <text x="772" y="354" class="meta gry">teeml inference · verifiable</text>
+
+  <!-- attested verdict -->
+  <rect x="1020" y="248" width="220" height="120" class="bg-blu"/>
+  <text x="1032" y="266" class="h1" fill="#fff">ATTESTED VERDICT</text>
+  <text x="1032" y="284" class="meta-w">consensus · confidence</text>
+  <text x="1032" y="302" class="meta-w">edge_pp = swarm_p − market_p</text>
+  <text x="1032" y="320" class="meta-w">+ 0G teeml envelope</text>
+  <text x="1032" y="354" class="meta-w" font-weight="700">→ /api/signal/run</text>
+
+  <!-- act-2 arrows -->
+  <line x1="360" y1="308" x2="400" y2="308" class="stroke-blu" marker-end="url(#arr)"/>
+  <line x1="720" y1="308" x2="760" y2="308" class="stroke-blu" marker-end="url(#arr)"/>
+  <line x1="980" y1="308" x2="1020" y2="308" class="stroke-blu" marker-end="url(#arr)"/>
+
+  <!-- gateway → signal-gateway feed-down arrow -->
+  <line x1="430" y1="174" x2="430" y2="248" class="stroke-blu-2" marker-end="url(#arr)"/>
+  <text x="438" y="210" class="lbl">DISPATCH</text>
+
+  <!-- ============================================================ -->
+  <!-- ORCHESTRATOR bridge band                                      -->
+  <!-- ============================================================ -->
+  <text x="20" y="412" class="lbl">ORCHESTRATOR · CLI DAEMON</text>
+  <line x1="20" y1="420" x2="1260" y2="420" class="stroke-dash"/>
+
+  <rect x="40" y="440" width="1200" height="58" class="bg-white stroke-blu"/>
+  <text x="52" y="458" class="h1" fill="#0000ff">ORCHESTRATOR</text>
+  <text x="52" y="478" class="meta">python -m orchestrator [once|dry|loop] · ranks markets by |edge_pp| × confidence · opens N positions / tick</text>
+  <text x="52" y="492" class="meta gry">hydrates from /api/execution/positions on boot — restart-safe, no double-trade</text>
+
+  <line x1="640" y1="498" x2="640" y2="540" class="stroke-blu-2" marker-end="url(#arr)"/>
+  <text x="650" y="520" class="lbl">POST /open</text>
+
+  <!-- ============================================================ -->
+  <!-- ACT 3 · EXECUTION (cross-chain)                               -->
+  <!-- ============================================================ -->
+  <text x="20" y="540" class="lbl">ACT 3 · EXECUTION · CROSS-CHAIN SETTLEMENT</text>
+  <line x1="20" y1="548" x2="1260" y2="548" class="stroke-dash"/>
+
+  <!-- execution-router -->
+  <rect x="440" y="568" width="400" height="62" class="bg-soft stroke-blu"/>
+  <text x="452" y="586" class="h1" fill="#0000ff">EXECUTION ROUTER</text>
+  <text x="452" y="604" class="meta">/open · /resolve · /positions · /audit · /positions/stream</text>
+  <text x="452" y="620" class="meta gry">flask :5004 · sqlite audit log · sse position deltas</text>
+
+  <!-- KeeperHub wrapper pill -->
+  <rect x="730" y="572" width="100" height="20" class="bg-white stroke-blu"/>
+  <text x="780" y="582" class="pill" fill="#0000ff" text-anchor="middle">KEEPERHUB</text>
+
+  <!-- Settlement column (Arb Sepolia) -->
+  <rect x="60" y="660" width="500" height="180" class="bg-white stroke-blu"/>
+  <text x="72" y="680" class="h1" fill="#0000ff">SETTLEMENT · ARBITRUM SEPOLIA</text>
+  <text x="72" y="696" class="meta gry">chainId 421614 · cctp domain 3</text>
+
+  <rect x="72" y="710" width="220" height="48" class="bg-soft stroke-blu"/>
+  <text x="82" y="724" class="h2" fill="#0000ff">PrivateSettlementHook</text>
+  <text x="82" y="742" class="meta">uniswap v4 + fhenix cofhe</text>
+  <text x="82" y="754" class="meta gry">fundBurner · markResolved · settle</text>
+
+  <rect x="304" y="710" width="240" height="48" class="bg-soft stroke-blu"/>
+  <text x="314" y="724" class="h2" fill="#0000ff">HybridFHERC20 (fhUSDC)</text>
+  <text x="314" y="742" class="meta">encrypted balance · InEuint128</text>
+  <text x="314" y="754" class="meta gry">cofhejs sealed inputs via cogito /fhe</text>
+
+  <rect x="72" y="772" width="220" height="48" class="bg-white stroke-blu"/>
+  <text x="82" y="786" class="h2" fill="#0000ff">Treasury GatewayWallet</text>
+  <text x="82" y="804" class="meta">unified balance source</text>
+  <text x="82" y="816" class="meta gry">one-time pre-deposit (per chain)</text>
+
+  <rect x="304" y="772" width="240" height="48" class="bg-white stroke-blu"/>
+  <text x="314" y="786" class="h2" fill="#0000ff">cogito /fhe/encrypt</text>
+  <text x="314" y="804" class="meta">cofhejs wrapper</text>
+  <text x="314" y="816" class="meta gry">mints real InEuint128 sealed inputs</text>
+
+  <!-- Trading column (Polygon Amoy) -->
+  <rect x="720" y="660" width="500" height="180" class="bg-white stroke-blu"/>
+  <text x="732" y="680" class="h1" fill="#0000ff">TRADING · POLYGON AMOY</text>
+  <text x="732" y="696" class="meta gry">chainId 80002 · cctp domain 7</text>
+
+  <rect x="732" y="710" width="220" height="48" class="bg-soft stroke-blu"/>
+  <text x="742" y="724" class="h2" fill="#0000ff">Polymarket CLOB</text>
+  <text x="742" y="742" class="meta">EOA-signed limit orders</text>
+  <text x="742" y="754" class="meta gry">no contracts to deploy</text>
+
+  <rect x="964" y="710" width="240" height="48" class="bg-soft stroke-blu"/>
+  <text x="974" y="724" class="h2" fill="#0000ff">Burner EOA (per position)</text>
+  <text x="974" y="742" class="meta">keccak(BURNER_SEED ‖ id)</text>
+  <text x="974" y="754" class="meta gry">deterministic · siloed risk</text>
+
+  <rect x="732" y="772" width="220" height="48" class="bg-white stroke-blu"/>
+  <text x="742" y="786" class="h2" fill="#0000ff">Per-position GatewayWallet</text>
+  <text x="742" y="804" class="meta">approve + deposit on /resolve</text>
+  <text x="742" y="816" class="meta gry">payout flows back via gateway</text>
+
+  <rect x="964" y="772" width="240" height="48" class="bg-white stroke-blu"/>
+  <text x="974" y="786" class="h2" fill="#0000ff">KeeperHub wrapper</text>
+  <text x="974" y="804" class="meta">tx execution · gas abstraction</text>
+  <text x="974" y="816" class="meta gry">opt-in via KEEPERHUB_API_KEY</text>
+
+  <!-- Circle Gateway bridge (between the two columns) -->
+  <rect x="572" y="690" width="138" height="120" class="bg-blu"/>
+  <text x="641" y="708" class="h1" fill="#fff" text-anchor="middle">CIRCLE</text>
+  <text x="641" y="725" class="h1" fill="#fff" text-anchor="middle">GATEWAY</text>
+  <text x="641" y="744" class="meta-w" text-anchor="middle">unified USDC</text>
+  <text x="641" y="758" class="meta-w" text-anchor="middle">EIP-712 BurnIntent</text>
+  <text x="641" y="772" class="meta-w" text-anchor="middle">+ Forwarder</text>
+  <text x="641" y="794" class="meta-w" text-anchor="middle" font-weight="700">&lt;500ms hop</text>
+
+  <!-- bidirectional arrows -->
+  <line x1="560" y1="730" x2="572" y2="730" class="stroke-blu-2" marker-end="url(#arr)"/>
+  <line x1="572" y1="755" x2="560" y2="755" class="stroke-blu-2" marker-end="url(#arr)"/>
+  <line x1="710" y1="730" x2="722" y2="730" class="stroke-blu-2" marker-end="url(#arr)"/>
+  <line x1="722" y1="755" x2="710" y2="755" class="stroke-blu-2" marker-end="url(#arr)"/>
+  <text x="540" y="720" class="lbl" text-anchor="end">/open</text>
+  <text x="540" y="765" class="lbl" text-anchor="end">/resolve</text>
+  <text x="744" y="720" class="lbl">/open</text>
+  <text x="744" y="765" class="lbl">/resolve</text>
+
+  <!-- router → both columns -->
+  <line x1="540" y1="630" x2="200" y2="660" class="stroke-blu"/>
+  <line x1="740" y1="630" x2="1080" y2="660" class="stroke-blu"/>
+
+  <!-- ============================================================ -->
+  <!-- legend                                                        -->
+  <!-- ============================================================ -->
+  <line x1="20" y1="852" x2="1260" y2="852" class="stroke-dash"/>
+  <text x="20" y="868" class="lbl">SPONSORS</text>
+  <text x="120" y="868" class="meta">0G storage + teeml compute</text>
+  <text x="320" y="868" class="meta">·  Gensyn AXL multi-agent mesh</text>
+  <text x="540" y="868" class="meta">·  Uniswap v4 hook + Fhenix CoFHE</text>
+  <text x="800" y="868" class="meta">·  Circle Gateway crosschain</text>
+  <text x="1020" y="868" class="meta">·  KeeperHub tx wrapper</text>
+</svg>
