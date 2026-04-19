@@ -254,6 +254,13 @@
       <span class="sb-cell sb-eq">MIROSHARK TERMINAL</span>
       <span class="sb-cell" id="sb-phase">PHASE —</span>
       <span class="sb-cell" id="sb-chains">— / —</span>
+      <span class="sb-cell sb-tenant-cell">
+        <span style="opacity:0.8;">TENANT</span>
+        <span id="sb-tenant-pill" class="tenant-pill default">DEFAULT</span>
+        <select id="sb-tenant-select" class="brut-select on-blue" title="active tenant">
+          <option value="default">default</option>
+        </select>
+      </span>
     </div>
     <div class="sb-right">
       <span class="sb-cell" id="sb-cogito">COGITO ?</span>
@@ -486,6 +493,15 @@
 
 const SIGNAL = window.MIROSHARK_SIGNAL_URL || `http://${location.hostname}:5002`;
 
+// ── tenant + demo mode ──
+// `?tenant=<id>` overrides the active tenant; `?demo=1` short-circuits all
+// network fetches and seeds the page with believable synthetic state so the
+// demo doesn't open on a sea of empty cards.
+const URL_PARAMS = new URLSearchParams(location.search);
+const DEMO_MODE  = URL_PARAMS.get('demo') === '1';
+const DEFAULT_TENANT = 'default';
+let activeTenant = URL_PARAMS.get('tenant') || DEFAULT_TENANT;
+
 // ── helpers ──
 const shorten  = (s, n = 10) => !s ? '' : (s.length <= n + 2 ? s : s.slice(0, n) + '…');
 const fmtTime  = t => t ? new Date(t * 1000).toLocaleTimeString() : '';
@@ -557,6 +573,54 @@ const tickClock = () => {
     new Date().toLocaleTimeString('en-US', { hour12: false });
 };
 setInterval(tickClock, 1000); tickClock();
+
+// ── tenant pill + dropdown ──
+// Multi-tenant routers expose /api/execution/tenants. Single-tenant forks
+// (no TENANTS env) just see the implicit "default" tenant. Either way, the
+// pill renders so the operator never wonders which fund this is.
+function paintTenantPill(t) {
+  const pill = document.getElementById('sb-tenant-pill');
+  if (!pill) return;
+  pill.textContent = (t || DEFAULT_TENANT).toUpperCase();
+  pill.classList.toggle('default', !t || t === DEFAULT_TENANT);
+}
+
+async function loadTenants() {
+  try {
+    const r = await fetch('/api/execution/tenants');
+    if (!r.ok) return;
+    const j = await r.json();
+    const ids = (j.tenants || []).map(t => t.tenant_id);
+    const all = ids.includes(DEFAULT_TENANT) ? ids : [DEFAULT_TENANT, ...ids];
+    const sel = document.getElementById('sb-tenant-select');
+    if (!sel) return;
+    sel.innerHTML = all.map(id =>
+      `<option value="${escapeHtml(id)}"${id === activeTenant ? ' selected' : ''}>${escapeHtml(id)}</option>`
+    ).join('');
+    if (!all.includes(activeTenant)) {
+      const opt = document.createElement('option');
+      opt.value = activeTenant;
+      opt.textContent = `${activeTenant} (unknown)`;
+      opt.selected = true;
+      sel.appendChild(opt);
+    }
+  } catch (e) {
+    // /tenants is optional — single-tenant mode is the default.
+  }
+}
+
+function onTenantChange(e) {
+  activeTenant = e.target.value || DEFAULT_TENANT;
+  paintTenantPill(activeTenant);
+  // Mutate URL so reload preserves the choice.
+  const u = new URL(window.location.href);
+  if (activeTenant === DEFAULT_TENANT) u.searchParams.delete('tenant');
+  else u.searchParams.set('tenant', activeTenant);
+  window.history.replaceState({}, '', u);
+  // Repaint positions filtered by tenant.
+  if (!DEMO_MODE) pollPositionsOnce();
+  pushAlert(`tenant → ${activeTenant}`, 1);
+}
 
 // ── /health (execution-router + signal-gateway) ──
 async function refreshHealth() {
@@ -799,6 +863,7 @@ async function openPositionFromVerdict(signal, tokenId) {
     token_id: tokenId,
     side: 'BUY',
     usdc_amount: amt,
+    tenant_id: activeTenant,
   };
   const btn = document.getElementById('btn-open');
   btn.disabled = true; btn.textContent = 'OPENING…';
@@ -1047,7 +1112,9 @@ async function fetchAudit(positionId) {
 // ── positions stream (SSE-first, polling fallback) ──
 async function pollPositionsOnce() {
   try {
-    const r = await fetch('/api/execution/positions');
+    const qs = activeTenant && activeTenant !== DEFAULT_TENANT
+      ? `?tenant_id=${encodeURIComponent(activeTenant)}` : '';
+    const r = await fetch(`/api/execution/positions${qs}`);
     const j = await r.json();
     positions.clear();
     for (const p of (j.positions || [])) positions.set(p.position_id, p);
@@ -1283,15 +1350,250 @@ function startInstruments() {
   topologyTimer = setInterval(refreshTopology, 20000);
 }
 
+/* ─────────────────────────────────────────────────────────────
+ *  AXL SWARM ANIMATION
+ *  Renders 3 nodes (Yggdrasil-routed) with packets gossiping
+ *  between them — used in the LIVE DEBATE pane to convey that
+ *  the swarm is actually doing something during /run + /stream.
+ *  Pure SVG + CSS keyframes, no JS animation loop.
+ * ────────────────────────────────────────────────────────────*/
+function renderSwarmStage(consensus = false) {
+  const consClass = consensus ? 'consensus' : '';
+  return `
+    <div class="swarm-stage">
+      <span class="swarm-tag">AXL MESH · YGGDRASIL ROUTED</span>
+      <svg viewBox="0 0 280 200" preserveAspectRatio="xMidYMid meet">
+        <line class="swarm-edge" x1="60" y1="60" x2="220" y2="60" />
+        <line class="swarm-edge" x1="220" y1="60" x2="140" y2="150" />
+        <line class="swarm-edge" x1="140" y1="150" x2="60" y2="60" />
+        <circle class="swarm-node ${consClass}" cx="60" cy="60" r="14" />
+        <text class="swarm-label" x="60" y="38" text-anchor="middle">NODE A</text>
+        <circle class="swarm-node ${consClass}" cx="220" cy="60" r="14" />
+        <text class="swarm-label" x="220" y="38" text-anchor="middle">NODE B</text>
+        <circle class="swarm-node ${consClass}" cx="140" cy="150" r="14" />
+        <text class="swarm-label" x="140" y="178" text-anchor="middle">NODE C</text>
+        <circle class="swarm-packet p1" cx="0" cy="0" r="3" />
+        <circle class="swarm-packet p2" cx="0" cy="0" r="3" />
+        <circle class="swarm-packet p3" cx="0" cy="0" r="3" />
+        <circle class="swarm-packet p4" cx="0" cy="0" r="3" />
+        <circle class="swarm-packet p5" cx="0" cy="0" r="3" />
+        <circle class="swarm-packet p6" cx="0" cy="0" r="3" />
+      </svg>
+      <span class="swarm-counter" id="swarm-counter">${consensus ? 'CONSENSUS' : 'DELIBERATING…'}</span>
+    </div>`;
+}
+
+/* ─────────────────────────────────────────────────────────────
+ *  DEMO SEED MODE (?demo=1)
+ *  First impressions kill — empty cards make the terminal look
+ *  broken on screenshot. Seed with believable synthetic state:
+ *    INTEL: 6 ranked markets
+ *    INSTRUMENTS: entropy + cryo + topology populated
+ *    DELIBERATE: verdict ribbon + swarm animation
+ *    EXECUTE: 2 positions (1 active + 1 settled) with audit trails
+ *  All in-memory; no backends touched.
+ * ────────────────────────────────────────────────────────────*/
+function seedDemo() {
+  pushAlert('demo mode · synthetic state', 2);
+
+  // statusbar
+  document.getElementById('sb-phase').textContent = 'PHASE 6';
+  document.getElementById('sb-chains').textContent = 'arb-sepolia ⇄ polygon-amoy';
+  document.getElementById('sb-cogito').textContent = 'COGITO ON';
+  document.getElementById('sb-keeper').textContent = 'KEEPERHUB ON';
+  document.getElementById('sb-bridge').textContent = 'BRIDGE LIVE';
+
+  // INTEL · 6 ranked markets
+  const fake = [
+    { market_id: '0xfedcba98', slug: 'will-btc-cross-100k-by-jun', question: 'Will BTC cross $100k by June 2026?',
+      outcomes: ['YES','NO'], outcome_prices: [0.62, 0.38], token_ids: ['t-btc-y','t-btc-n'],
+      liquidity_usd: 184000, volume_usd: 920000 },
+    { market_id: '0xab12cd34', slug: 'fed-cuts-25bps-next-meeting', question: 'Will the Fed cut 25bps at the next FOMC?',
+      outcomes: ['YES','NO'], outcome_prices: [0.41, 0.59], token_ids: ['t-fed-y','t-fed-n'],
+      liquidity_usd: 92000, volume_usd: 410000 },
+    { market_id: '0x55aa66bb', slug: 'eth-flips-btc-2026', question: 'Will ETH flip BTC by EOY 2026?',
+      outcomes: ['YES','NO'], outcome_prices: [0.08, 0.92], token_ids: ['t-flip-y','t-flip-n'],
+      liquidity_usd: 47000, volume_usd: 220000 },
+    { market_id: '0x77ee88dd', slug: 'apple-ai-keynote', question: 'Will Apple ship on-device LLM at WWDC 2026?',
+      outcomes: ['YES','NO'], outcome_prices: [0.71, 0.29], token_ids: ['t-aapl-y','t-aapl-n'],
+      liquidity_usd: 28000, volume_usd: 88000 },
+    { market_id: '0x99cc11ff', slug: 'us-election-recount', question: 'Will any state trigger a 2026 midterm recount?',
+      outcomes: ['YES','NO'], outcome_prices: [0.34, 0.66], token_ids: ['t-rec-y','t-rec-n'],
+      liquidity_usd: 18500, volume_usd: 64000 },
+    { market_id: '0x22dd33aa', slug: 'mars-cargo-2026', question: 'Will SpaceX land cargo on Mars in 2026?',
+      outcomes: ['YES','NO'], outcome_prices: [0.04, 0.96], token_ids: ['t-mars-y','t-mars-n'],
+      liquidity_usd: 6800, volume_usd: 23000 },
+  ];
+  scannedMarkets.clear();
+  for (const m of fake) scannedMarkets.set(m.market_id, m);
+  document.getElementById('board-count').textContent = `${fake.length} candidates · DEMO`;
+  document.getElementById('market-list').innerHTML = fake.map((m, i) => {
+    const tier = m.liquidity_usd >= 50000 ? 'tier-2' : m.liquidity_usd >= 15000 ? 'tier-1' : 'tier-0';
+    return `
+      <div class="market-row" data-id="${m.market_id}">
+        <div class="rank">${String(i+1).padStart(2,'0')}</div>
+        <div>
+          <div class="q">${escapeHtml(m.question)}</div>
+          <div class="meta">${escapeHtml(m.slug)} · vol ${fmtUsd(m.volume_usd)} · ${m.outcomes.join(' / ')}</div>
+        </div>
+        <div class="liq">${fmtUsd(m.liquidity_usd)}</div>
+        <div class="tier-pill"><span class="tier ${tier}">${tier === 'tier-2' ? 'DEEP' : tier === 'tier-1' ? 'MID' : 'THIN'}</span></div>
+      </div>`;
+  }).join('');
+  document.querySelectorAll('#market-list .market-row').forEach(row => {
+    row.addEventListener('click', () => selectMarket(row.dataset.id));
+  });
+
+  // INSTRUMENTS · entropy + cryo + topology readouts
+  document.getElementById('instr-status').textContent = 'cryo OK · 6 scanned · 2 latched · DEMO';
+  document.getElementById('cryo-meta').textContent = 'T1=2 · T2=1 · LATCH 3';
+  document.getElementById('cryo-body').innerHTML = `<div class="cryo-mini">` + fake.slice(0, 5).map(m => {
+    const tier = m.liquidity_usd >= 50000 ? 2 : m.liquidity_usd >= 15000 ? 1 : 0;
+    const cls = tier === 2 ? 'row-t2' : tier === 1 ? 'row-t1' : '';
+    const h = (Math.log2(m.outcomes.length) * (0.55 + Math.random() * 0.4)).toFixed(2);
+    return `<div class="cryo-mini-row ${cls}">
+      <span class="q" title="${escapeHtml(m.question)}">${escapeHtml(m.question)}</span>
+      <span class="h">${h}</span>
+      <span class="z">z=${(1.4 - tier * 0.3).toFixed(2)}</span>
+      <span>${tierBadge(tier)}</span>
+    </div>`;
+  }).join('') + `</div>`;
+  document.getElementById('topology-meta').textContent = 'tracked 6/6 · win=72 · |r|≥0.6 · DEMO';
+  document.getElementById('topology-body').innerHTML = `
+    <div class="topo-grid">
+      <div>
+        <div class="topo-h">CORRELATED PAIRS · |r| ≥ 0.6</div>
+        <div class="topo-edges">
+          <div class="topo-edge"><span class="lab">BTC&gt;100K</span><span class="arrow">↔</span><span class="lab">ETH FLIPS</span><span class="r">+0.74</span></div>
+          <div class="topo-edge neg"><span class="lab">FED CUT</span><span class="arrow">⇄</span><span class="lab">RECOUNT</span><span class="r">-0.62</span></div>
+          <div class="topo-edge"><span class="lab">AAPL AI</span><span class="arrow">↔</span><span class="lab">BTC&gt;100K</span><span class="r">+0.61</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="topo-h">CLUSTERS · CONNECTED COMPONENTS</div>
+        <div class="topo-clusters">
+          <div class="topo-cluster"><span class="csize">×3</span><span class="clab">BTC</span><span class="clab">ETH</span><span class="clab">AAPL</span></div>
+          <div class="topo-cluster"><span class="csize">×2</span><span class="clab">FED</span><span class="clab">RECOUNT</span></div>
+        </div>
+      </div>
+    </div>`;
+
+  // DELIBERATE · pre-populate verdict ribbon
+  selectedMarket = fake[0];
+  renderDeliberationIdle();
+  // Render synthetic signal + verdict + swarm animation in the debate pane.
+  setTimeout(() => {
+    const synthetic = {
+      market_id: fake[0].market_id,
+      phase: 'phase-6 (demo)',
+      model: 'gpt-4o-mini · synthetic',
+      elapsed_s: 2.1,
+      contributing_agents: 9,
+      seed_hash_0g: '0xdemoSeed' + 'a'.repeat(50),
+      simulation_hash_0g: '0xdemoSim' + 'b'.repeat(52),
+      swarm_prediction: { YES: 0.78, NO: 0.22 },
+      reasoning: 'BTC dominance + AAPL AI tailwind + macro liquidity print → swarm consensus tilts toward YES at 78% vs market 62%, edge +16pp.',
+      confidence: 0.81,
+      attestation_envelope: { provider: '0g-teeml-llama3.3-70b', valid: true },
+      edge: { outcome: 'YES', edge_pp: 16.0, swarm_probability: 0.78, market_probability: 0.62 },
+    };
+    lastSignal = synthetic;
+    renderSignal(synthetic);
+    renderVerdict(synthetic);
+    // Swap the empty debate feed for the swarm animation + a few canned lines.
+    const feed = document.getElementById('swarm-feed');
+    if (feed) {
+      feed.innerHTML = '';
+      feed.parentElement.insertAdjacentHTML('afterbegin', renderSwarmStage(false));
+      const lines = [
+        ['start', '<span class="who">SWARM START</span> · 9 specs · 3 nodes · 3 rounds'],
+        ['',      '<span class="who">node-a/agent-1</span> R1 <span class="conf">conf=0.62</span> · YES=72% NO=28%'],
+        ['',      '<span class="who">node-b/agent-3</span> R1 <span class="conf">conf=0.71</span> · YES=78% NO=22%'],
+        ['',      '<span class="who">node-c/agent-2</span> R2 <span class="conf">conf=0.79</span> · YES=80% NO=20%'],
+        ['result','<span class="who">CONSENSUS</span> · conf=0.81 · YES=78.0% NO=22.0% · 9 beliefs in 2.1s'],
+      ];
+      lines.forEach((l, i) => setTimeout(() => {
+        const div = document.createElement('div');
+        div.className = `swarm-line ${l[0]}`;
+        div.innerHTML = l[1];
+        feed.appendChild(div);
+        feed.scrollTop = feed.scrollHeight;
+        if (l[0] === 'result') {
+          // upgrade the swarm stage to consensus state
+          const stage = document.querySelector('.swarm-stage');
+          if (stage) stage.outerHTML = renderSwarmStage(true);
+        }
+      }, 700 + i * 600));
+    }
+    document.getElementById('stream-status').textContent = 'CONSENSUS · DEMO';
+    pushAlert('signal: YES edge=+16.0pp · confidence 0.81', 2);
+  }, 800);
+
+  // EXECUTE · 2 fake positions, 1 active + 1 settled, with audit trails
+  const now = Math.floor(Date.now() / 1000);
+  const p1 = {
+    position_id: 'pos-demo-001', tenant_id: activeTenant,
+    strategy: 'directional', market_id: '0xfedcba98', token_id: 't-btc-y',
+    side: 'BUY', usdc_amount: 25, status: 'open',
+    burner_address: '0xBURN' + '1'.repeat(36), updated_at: now - 90,
+    fund_tx: '0xfundtx1' + '0'.repeat(58),
+    bridge_send_burn_tx: '0xsendburn' + '0'.repeat(56), bridge_send_mint_tx: '0xsendmint' + '0'.repeat(56),
+    clob_order_id: '0xCLOB001' + '0'.repeat(58),
+  };
+  const p2 = {
+    position_id: 'pos-demo-002', tenant_id: activeTenant,
+    strategy: 'arb', market_id: '0x55aa66bb', token_id: 't-flip-n',
+    side: 'BUY', usdc_amount: 12, status: 'settled',
+    burner_address: '0xBURN' + '2'.repeat(36), updated_at: now - 1800,
+    fund_tx: '0xfundtx2' + '0'.repeat(58),
+    bridge_send_burn_tx: '0xsb2' + '0'.repeat(61), bridge_send_mint_tx: '0xsm2' + '0'.repeat(61),
+    clob_order_id: '0xCLOB002' + '0'.repeat(58),
+    gateway_deposit_tx: '0xgwdep' + '0'.repeat(59),
+    bridge_recv_burn_tx: '0xrb' + '0'.repeat(62), bridge_recv_mint_tx: '0xrm' + '0'.repeat(62),
+    resolve_tx: '0xresolve' + '0'.repeat(58), settle_tx: '0xsettle' + '0'.repeat(58),
+    payout_usdc: 18.40,
+  };
+  positions.set(p1.position_id, p1);
+  positions.set(p2.position_id, p2);
+  auditByPos.set(p1.position_id, [
+    { event: 'fund_burner.ok',  status: 'ok', ts: now - 95, payload: { tx_hash: p1.fund_tx, chain: 'settlement' } },
+    { event: 'bridge_send.ok',  status: 'ok', ts: now - 80, payload: { burn_tx_hash: p1.bridge_send_burn_tx, source: 'settlement', destination: 'trading' } },
+    { event: 'clob_submit.ok',  status: 'ok', ts: now - 70, payload: { clob_order_id: p1.clob_order_id } },
+    { event: 'open.received',   status: 'ok', ts: now - 100, payload: {} },
+  ]);
+  auditByPos.set(p2.position_id, [
+    { event: 'settle.ok',         status: 'ok', ts: now - 1820, payload: { settle_tx: p2.settle_tx, payout_usdc: 18.40 } },
+    { event: 'mark_resolved.ok',  status: 'ok', ts: now - 1830, payload: { tx_hash: p2.resolve_tx, chain: 'settlement' } },
+    { event: 'bridge_recv.ok',    status: 'ok', ts: now - 1850, payload: { mint_tx_hash: p2.bridge_recv_mint_tx, destination: 'settlement' } },
+    { event: 'gateway_deposit.ok',status: 'ok', ts: now - 1870, payload: { tx_hash: p2.gateway_deposit_tx, chain: 'trading' } },
+    { event: 'clob_submit.ok',    status: 'ok', ts: now - 1900, payload: { clob_order_id: p2.clob_order_id } },
+    { event: 'bridge_send.ok',    status: 'ok', ts: now - 1920, payload: { burn_tx_hash: p2.bridge_send_burn_tx, source: 'settlement', destination: 'trading' } },
+    { event: 'fund_burner.ok',    status: 'ok', ts: now - 1940, payload: { tx_hash: p2.fund_tx, chain: 'settlement' } },
+    { event: 'open.received',     status: 'ok', ts: now - 1950, payload: {} },
+  ]);
+  renderExecution();
+  document.getElementById('sb-positions').textContent = `POS ${positions.size}`;
+}
+
 // ── boot ──
 document.getElementById('btn-scan').addEventListener('click', scanMarkets);
+document.getElementById('sb-tenant-select').addEventListener('change', onTenantChange);
 window.addEventListener('scroll', refreshActIndicator, { passive: true });
 window.addEventListener('resize', refreshActIndicator);
 refreshActIndicator();
-refreshHealth(); setInterval(refreshHealth, 8000);
-openPositionStream();
-startInstruments();
-pushAlert('terminal online', 2);
+paintTenantPill(activeTenant);
+loadTenants();
+
+if (DEMO_MODE) {
+  // demo mode short-circuits every backend call. Safe to call from boot
+  // because seedDemo() also handles render, alerts, and timers.
+  seedDemo();
+} else {
+  refreshHealth(); setInterval(refreshHealth, 8000);
+  openPositionStream();
+  startInstruments();
+  pushAlert('terminal online', 2);
+}
 </script>
 </body>
 </html>

@@ -189,8 +189,7 @@
     gap: 8px;
     align-items: center;
   }
-  .date-nav input,
-  .date-nav select {
+  .date-nav input {
     border: 1px solid #fff;
     background: transparent;
     color: #fff;
@@ -199,7 +198,6 @@
     padding: 2px 6px;
     letter-spacing: 0.04em;
   }
-  .date-nav select option { color: var(--fg); background: #fff; }
   .date-nav input::-webkit-calendar-picker-indicator { filter: invert(1); }
   .date-nav button {
     border: 1px solid #fff;
@@ -213,18 +211,7 @@
   }
   .date-nav button:hover { background: var(--blu); color: #fff; }
 
-  .tenant-pill {
-    display: inline-block;
-    border: 1px solid #fff;
-    padding: 1px 8px;
-    margin-left: 8px;
-    font-size: 10px;
-    letter-spacing: 0.18em;
-    font-weight: 700;
-    background: #fff;
-    color: var(--blu);
-  }
-  .tenant-pill.default { background: transparent; color: #fff; border-style: dashed; }
+  /* .tenant-pill + .brut-select live in terminal.css */
 </style>
 </head>
 <body>
@@ -234,7 +221,7 @@
     <div class="right">
       <div class="date-nav">
         <span style="opacity:.8;">TENANT</span>
-        <select id="tenant-select"><option value="default">default</option></select>
+        <select id="tenant-select" class="brut-select on-blue"><option value="default">default</option></select>
         <span style="opacity:.8; margin-left:6px;">DATE</span>
         <input type="date" id="date-input" />
         <button id="date-go">LOAD</button>

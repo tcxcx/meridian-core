@@ -394,3 +394,189 @@ pre { margin: 0; font-family: inherit; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: #fff; border-left: 1px solid var(--gry-2); }
 ::-webkit-scrollbar-thumb { background: var(--blu); }
+
+/* ─────────── TENANT PILL ───────────
+   Identifies the active fund. White-on-blue when set, dashed-outline
+   when default. Used in statusbar (terminal) + vbar (verifier). */
+.tenant-pill {
+  display: inline-block;
+  border: 1px solid #fff;
+  padding: 1px 8px;
+  margin-left: 4px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  background: #fff;
+  color: var(--blu);
+}
+.tenant-pill.default { background: transparent; color: #fff; border-style: dashed; }
+.sb-tenant-cell { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ─────────── BRUTALIST DROPDOWN ───────────
+   Strip the native chrome and draw a matte blue carat. Works on every
+   modern browser; on iOS it still falls back to the native sheet because
+   that's what users expect for a real <select>. */
+.brut-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--blu) 50%),
+    linear-gradient(-45deg, transparent 50%, var(--blu) 50%);
+  background-position:
+    calc(100% - 12px) 50%,
+    calc(100% - 7px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  border: 1px solid var(--blu);
+  color: var(--blu);
+  padding: 3px 24px 3px 8px;
+  cursor: pointer;
+  border-radius: 0;
+  outline: none;
+}
+.brut-select:focus { background-color: var(--blu-soft); }
+.brut-select:hover { background-color: var(--blu-soft); }
+.brut-select.on-blue {
+  background-color: var(--blu);
+  color: #fff;
+  border-color: #fff;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #fff 50%),
+    linear-gradient(-45deg, transparent 50%, #fff 50%);
+}
+.brut-select.on-blue:focus,
+.brut-select.on-blue:hover { background-color: #1a1aff; }
+.brut-select option { background: #fff; color: var(--blu); font-weight: 700; }
+
+/* ─────────── AXL SWARM ANIMATION ───────────
+   3-node triangle (Yggdrasil-routed) with packets gossiping between
+   nodes, building toward consensus. Drops in beside DELIBERATE feed. */
+.swarm-stage {
+  position: relative;
+  width: 100%;
+  height: 180px;
+  background: var(--gry-3);
+  border: 1px dashed var(--blu);
+  overflow: hidden;
+}
+.swarm-stage svg { display: block; width: 100%; height: 100%; }
+.swarm-edge { stroke: var(--gry-2); stroke-width: 1; stroke-dasharray: 3 3; }
+.swarm-node {
+  fill: #fff; stroke: var(--blu); stroke-width: 2;
+}
+.swarm-node.consensus { fill: var(--blu); animation: pulse 1.6s ease-in-out infinite; }
+.swarm-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; font-weight: 700;
+  letter-spacing: 0.14em; fill: var(--blu);
+}
+.swarm-packet {
+  fill: var(--blu);
+  filter: drop-shadow(0 0 2px rgba(0,0,255,0.4));
+}
+.swarm-packet.p1 { animation: pktAB 1.4s linear infinite; }
+.swarm-packet.p2 { animation: pktBC 1.6s linear infinite; animation-delay: 0.3s; }
+.swarm-packet.p3 { animation: pktCA 1.5s linear infinite; animation-delay: 0.6s; }
+.swarm-packet.p4 { animation: pktBA 1.7s linear infinite; animation-delay: 0.2s; }
+.swarm-packet.p5 { animation: pktCB 1.3s linear infinite; animation-delay: 0.9s; }
+.swarm-packet.p6 { animation: pktAC 1.8s linear infinite; animation-delay: 0.4s; }
+@keyframes pktAB { 0% { transform: translate(60px, 60px); } 100% { transform: translate(220px, 60px); } }
+@keyframes pktBC { 0% { transform: translate(220px, 60px); } 100% { transform: translate(140px, 150px); } }
+@keyframes pktCA { 0% { transform: translate(140px, 150px); } 100% { transform: translate(60px, 60px); } }
+@keyframes pktBA { 0% { transform: translate(220px, 60px); } 100% { transform: translate(60px, 60px); } }
+@keyframes pktCB { 0% { transform: translate(140px, 150px); } 100% { transform: translate(220px, 60px); } }
+@keyframes pktAC { 0% { transform: translate(60px, 60px); } 100% { transform: translate(140px, 150px); } }
+.swarm-stage .swarm-tag {
+  position: absolute;
+  top: 8px; left: 10px;
+  font-size: 9px; letter-spacing: 0.18em; color: var(--blu); font-weight: 700;
+}
+.swarm-stage .swarm-counter {
+  position: absolute;
+  bottom: 8px; right: 10px;
+  font-size: 10px; color: var(--blu); font-weight: 700; letter-spacing: 0.1em;
+}
+
+/* ─────────── RESPONSIVE — operator console collapses to mobile ─────────── */
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr 26px;
+    height: auto;
+    min-height: 100vh;
+  }
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--blu);
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0;
+    gap: 0;
+    height: auto;
+    flex-shrink: 0;
+  }
+  .brand {
+    border-bottom: none;
+    border-right: 1px solid var(--blu);
+    padding: 8px 10px;
+    flex-shrink: 0;
+    gap: 6px;
+  }
+  .brand-mark { width: 28px; height: 28px; }
+  .side-section {
+    border-bottom: none;
+    border-right: 1px solid var(--blu);
+    padding: 4px 0;
+    flex-shrink: 0;
+    min-width: 220px;
+  }
+  .side-foot { display: none; }
+  .alerts { max-height: 60px; overflow-y: auto; }
+}
+
+@media (max-width: 768px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr 26px; }
+  .statusbar { font-size: 10px; padding: 4px 6px; flex-wrap: wrap; height: auto; min-height: 28px; gap: 4px; }
+  .sb-left, .sb-right { gap: 8px; flex-wrap: wrap; }
+  .sb-cell { font-size: 10px; }
+  .sidebar { display: none; }
+  .main { padding: 6px; }
+  .card { margin-bottom: 6px; }
+  .card-h { font-size: 10px; padding: 4px 6px; flex-wrap: wrap; gap: 4px; }
+  .entropy-body, .cryo-body, .topo-body { grid-template-columns: 1fr !important; }
+  .instr-grid { grid-template-columns: 1fr !important; }
+  .instr-cell { border-right: none !important; border-bottom: 1px solid var(--blu); }
+  .instr-cell:last-child { border-bottom: none; }
+  .instr-full { border-bottom: none; }
+  .topo-grid { grid-template-columns: 1fr !important; }
+  .intel-grid { grid-template-columns: 1fr !important; }
+  .delib-grid { grid-template-columns: 1fr !important; }
+  .pos-card { grid-template-columns: 1fr !important; gap: 8px; padding: 10px; }
+  .pos-card .pos-h { flex-wrap: wrap; gap: 6px; }
+  .root-block { grid-template-columns: 1fr !important; gap: 6px; padding: 10px; }
+  .meta-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .meta-cell { border-right: 1px dashed var(--gry-2); }
+  .meta-cell:nth-child(2n) { border-right: none; }
+  .delib-head { grid-template-columns: 1fr !important; gap: 8px; }
+  .topo-edge { grid-template-columns: 1fr auto 1fr 50px !important; font-size: 10px; }
+  .cryo-mini-row { grid-template-columns: 1fr 40px 50px 60px !important; font-size: 10px; }
+  .entropy-readout { grid-template-columns: 1fr !important; }
+  .entropy-readout .big { font-size: 32px !important; }
+  .ticker-track { font-size: 10px; gap: 14px; }
+  .open-form { flex-wrap: wrap; gap: 4px !important; padding: 4px 6px !important; }
+  .open-form input { width: 60px !important; }
+  .verdict-ribbon { flex-direction: column; gap: 8px; align-items: flex-start !important; padding: 10px !important; }
+  .vmain { padding: 8px !important; }
+  .vbar { flex-direction: column; align-items: flex-start !important; gap: 8px; padding: 10px 12px !important; }
+  .vbar h1 { font-size: 11px !important; }
+  .date-nav { flex-wrap: wrap; gap: 4px !important; }
+  .swarm-stage { height: 140px; }
+}
