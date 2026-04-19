@@ -1,15 +1,19 @@
 # cogito — MERIDIAN's 0G anchor + inference sidecar
 
-Tiny Hono+Bun service that wraps both 0G TypeScript SDKs:
+Tiny Hono+Bun service that wraps the TS-only SDKs we need from Python:
 
 - **`@0gfoundation/0g-ts-sdk`** → 0G **Storage**: pins seed + simulation
   envelopes and serves them back by merkle root.
 - **`@0glabs/0g-serving-broker`** → 0G **Compute** (DeAIOS): runs
   OpenAI-compatible chat completions through TeeML-verifiable providers
   with on-chain micropayments.
+- **`@circle-fin/bridge-kit`** → Circle **CCTP V2** cross-chain USDC
+  transfers (Arb Sepolia ↔ Polygon Amoy) via `POST /bridge`.
+- **`cofhejs`** → Fhenix **CoFHE** sealed-input generation via
+  `POST /fhe/encrypt` (mints real `InEuint128` payloads for the hook).
 
-The Python `meridian_signal` gateway calls cogito over `127.0.0.1:5003`
-because the 0G SDKs are TypeScript-only.
+The Python `meridian_signal` + `execution_router` services call cogito
+over `127.0.0.1:5003` because these SDKs are TypeScript / WASM-only.
 
 ## Layout
 
@@ -18,7 +22,9 @@ cogito/
 ├── src/
 │   ├── index.ts          Hono app + middleware + routes
 │   ├── zg.ts             ZgClient: upload(), download()  (0G Storage)
-│   └── compute.ts        ComputeClient: listServices(), inference(), ack/fund
+│   ├── compute.ts        ComputeClient: listServices(), inference(), ack/fund
+│   ├── bridge.ts         createBridgeRoutes: POST /bridge (Circle CCTP V2)
+│   └── fhe.ts            createFheRoutes:    POST /fhe/encrypt (cofhejs InEuint128)
 ├── package.json
 └── tsconfig.json
 ```
@@ -38,6 +44,9 @@ cogito/
   | `COGITO_TOKEN` | shared bearer token (Python <-> Node localhost auth) |
   | `COGITO_PORT` | default `5003` |
   | `COGITO_HOST` | default `127.0.0.1` (do NOT bind 0.0.0.0) |
+  | `TREASURY_PRIVATE_KEY` | (optional) enables `POST /bridge` — Arb Sepolia signer |
+  | `FHE_PRIVATE_KEY` | (optional) enables `POST /fhe/encrypt`; falls back to `TREASURY_PRIVATE_KEY` |
+  | `FHE_RPC_URL` | (optional) Arb Sepolia RPC for cofhejs; falls back to `ARB_SEPOLIA_RPC_URL` → `ZG_RPC_URL` |
 
 ## Boot
 
@@ -117,6 +126,40 @@ curl -sS -X POST http://127.0.0.1:5003/compute/inference \
 To route the Python swarm through 0G Compute, set `LLM_PROVIDER=0g` in
 `meridian-core/.env`. The signal gateway will call
 `/compute/inference` instead of OpenAI.
+
+### Fhenix CoFHE (`POST /fhe/encrypt`)
+
+Mints a real `InEuint128` sealed input for the `PrivateSettlementHook` on
+Arbitrum Sepolia. The Python execution-router (`encryptor.CogitoEncryptor`)
+posts here for `fundBurner` and `markResolved`.
+
+Request:
+
+```json
+{
+  "value": "1000000",                                   // decimal uint128 (USDC micros etc.)
+  "sender": "0xabc...",                                 // must equal cogito's FHE signer
+  "utype": 6,                                           // optional; FheTypes.Uint128
+  "security_zone": 0                                    // optional
+}
+```
+
+Response (matches Solidity `InEuint128(uint256,uint8,uint8,bytes)`):
+
+```json
+{ "ctHash": "0x…", "securityZone": 0, "utype": 6, "signature": "0x…" }
+```
+
+The route is `503 offline` until both `FHE_PRIVATE_KEY` (or
+`TREASURY_PRIVATE_KEY`) and an Arb Sepolia RPC are configured.
+`sender` must match the cofhejs signer address — CoFHE binds the sealed
+input to the prover; a mismatch reverts on-chain.
+
+### Circle Bridge Kit (`POST /bridge`)
+
+Server-signed CCTP V2 USDC transfer. Used by the Python execution-router
+to move USDC Arb Sepolia ↔ Polygon Amoy around each position (see
+`services/execution_router/bridge_client.py`).
 
 ## Security
 

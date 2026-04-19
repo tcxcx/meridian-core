@@ -48,6 +48,7 @@ def scan_markets():
                 "volume_usd": m.volume_usd,
                 "outcomes": m.outcomes,
                 "outcome_prices": m.outcome_prices,
+                "token_ids": m.token_ids,
             }
             for m in markets
         ],
@@ -117,6 +118,7 @@ def run_signal():
                     "model": out.model,
                     "elapsed_s": round(elapsed, 2),
                     "seed_hash_0g": seed_pin.root_hash if seed_pin else None,
+                    "attestation_envelope": out.attestation_envelope,
                 },
                 meta={"run_id": run_id, "seed_hash_0g": seed_pin.root_hash if seed_pin else None},
             )
@@ -148,6 +150,7 @@ def run_signal():
         "seed_tx_0g": seed_pin.tx_hash if seed_pin else None,
         "simulation_hash_0g": sim_pin.root_hash if sim_pin else None,
         "simulation_tx_0g": sim_pin.tx_hash if sim_pin else None,
+        "attestation_envelope": out.attestation_envelope,
     })
 
 
@@ -172,7 +175,9 @@ def create_app() -> Flask:
         load_dotenv(env_path, override=True)
 
     app = Flask(__name__)
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    # Dashboard at execution-router :5004 polls signal-gateway across origins.
+    # Allow all routes (including /health) for testnet/hackathon scope.
+    CORS(app, origins="*")
 
     @app.get("/health")
     def health():
@@ -185,6 +190,8 @@ def create_app() -> Flask:
         }
 
     app.register_blueprint(signal_bp)
+    from .sse import sse_bp  # lazy: pulls in swarm_runner only when registered
+    app.register_blueprint(sse_bp)
     return app
 
 

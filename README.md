@@ -1,203 +1,145 @@
-<div align="center">
+# MERIDIAN
 
-<img src="./static/image/MiroFish_logo_compressed.jpeg" alt="MiroFish Logo" width="75%"/>
+> **Confidential autonomous prediction-market hedge fund.** Multi-agent LLM swarm scans Polymarket, ranks markets by edge × confidence, and trades through per-position burner EOAs whose treasury funding flow is encrypted with FHE on a Uniswap v4 hook.
 
-<a href="https://trendshift.io/repositories/16144" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16144" alt="666ghj%2FMiroFish | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+Forked from [`666ghj/MiroFish`](https://github.com/666ghj/MiroFish). The MiroFish swarm engine is the brain; everything in `services/`, `contracts/`, and the cross-chain settlement plumbing is MERIDIAN.
 
-简洁通用的群体智能引擎，预测万物
-</br>
-<em>A Simple and Universal Swarm Intelligence Engine, Predicting Anything</em>
+---
 
-<a href="https://www.shanda.com/" target="_blank"><img src="./static/image/shanda_logo.png" alt="666ghj%2MiroFish | Shanda" height="40"/></a>
+## Pitch
 
-[![GitHub Stars](https://img.shields.io/github/stars/666ghj/MiroFish?style=flat-square&color=DAA520)](https://github.com/666ghj/MiroFish/stargazers)
-[![GitHub Watchers](https://img.shields.io/github/watchers/666ghj/MiroFish?style=flat-square)](https://github.com/666ghj/MiroFish/watchers)
-[![GitHub Forks](https://img.shields.io/github/forks/666ghj/MiroFish?style=flat-square)](https://github.com/666ghj/MiroFish/network)
-[![Docker](https://img.shields.io/badge/Docker-Build-2496ED?style=flat-square&logo=docker&logoColor=white)](https://hub.docker.com/)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/666ghj/MiroFish)
+> _TODO — drop the 1-page pitch here._
+>
+> Frame: privacy gap on Polymarket today (copy-trading, position-size leakage), MERIDIAN's encrypted treasury→burner flow, why this stack (Fhenix CoFHE for encrypted *amounts*, 0G for verifiable inference + storage anchor, Circle CCTP V2 for the only viable Arb↔Polygon route, KeeperHub for relayed tx, Gensyn AXL for swarm consensus).
 
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white)](http://discord.gg/ePf5aPaHnA)
-[![X](https://img.shields.io/badge/X-Follow-000000?style=flat-square&logo=x&logoColor=white)](https://x.com/mirofish_ai)
-[![Instagram](https://img.shields.io/badge/Instagram-Follow-E4405F?style=flat-square&logo=instagram&logoColor=white)](https://www.instagram.com/mirofish_ai/)
+## Architecture
 
-[English](./README.md) | [中文文档](./README-ZH.md)
+> _TODO — drop the Mermaid diagram here._
+>
+> Suggested swimlanes: Off-chain (Python) · cogito sidecar (TS/Bun) · On-chain (Arb Sepolia + Polygon Amoy). See [`.context/meridian/BUILD_PLAN.md`](./.context/meridian/BUILD_PLAN.md) for source-of-truth.
 
-</div>
+---
 
-## ⚡ Overview
+## Sponsor tracks (all four wired)
 
-**MiroFish** is a next-generation AI prediction engine powered by multi-agent technology. By extracting seed information from the real world (such as breaking news, policy drafts, or financial signals), it automatically constructs a high-fidelity parallel digital world. Within this space, thousands of intelligent agents with independent personalities, long-term memory, and behavioral logic freely interact and undergo social evolution. You can inject variables dynamically from a "God's-eye view" to precisely deduce future trajectories — **rehearse the future in a digital sandbox, and win decisions after countless simulations**.
+| Track | Surface |
+|---|---|
+| **Uniswap Foundation** | Custom v4 hook `PrivateSettlementHook` + `HybridFHERC20` (fhUSDC). 38/38 Foundry tests pass. Implements Fhenix's published *Private Prediction Market* case study end-to-end. |
+| **Fhenix CoFHE** | `euint128` treasury → burner → treasury deltas. Real `InEuint128` sealed inputs minted via cofhejs server-side (`cogito /fhe/encrypt`). |
+| **0G** | `cogito` sidecar wraps **0G Storage** (pins seed + simulation envelopes by merkle root) AND **0G Compute** (TeeML-verifiable LLM inference; `LLM_PROVIDER=0g` toggles it). |
+| **KeeperHub** | Every hook tx (`fundBurner`, `markResolved`, `settle`) routes through KeeperHub Direct Execution API when `KEEPERHUB_API_KEY` is set. |
+| **Gensyn AXL** *(bonus)* | 3-node Yggdrasil-routed multi-agent mesh; agents gossip beliefs over `/recv` per-node before consensus. `SWARM_BACKEND=axl` toggles it. |
 
-> You only need to: Upload seed materials (data analysis reports or interesting novel stories) and describe your prediction requirements in natural language</br>
-> MiroFish will return: A detailed prediction report and a deeply interactive high-fidelity digital world
+## Chain topology
 
-### Our Vision
+| Role | Chain | Why |
+|---|---|---|
+| **Settlement** — fhUSDC + `PrivateSettlementHook` + treasury custody | Arbitrum Sepolia (chainId `421614`, CCTP domain `3`) | Fhenix CoFHE testnet coverage; cheaper/faster than Eth Sepolia. |
+| **Trading** — Polymarket CLOB + per-position burner EOAs | Polygon PoS Amoy (chainId `80002`, CCTP domain `7`) | Polymarket has always been Polygon-native (EOA flow, no deploy). |
+| **Cross-chain** | Circle **Bridge Kit** (CCTP V2) — NOT Gateway. Gateway testnet doesn't cover either chain. | See [`LESSONS.md`](./LESSONS.md). |
 
-MiroFish is dedicated to creating a swarm intelligence mirror that maps reality. By capturing the collective emergence triggered by individual interactions, we break through the limitations of traditional prediction:
+## Position lifecycle
 
-- **At the Macro Level**: We are a rehearsal laboratory for decision-makers, allowing policies and public relations to be tested at zero risk
-- **At the Micro Level**: We are a creative sandbox for individual users — whether deducing novel endings or exploring imaginative scenarios, everything can be fun, playful, and accessible
+**`/open`:**
+1. Derive burner EOA: `keccak(BURNER_SEED ‖ position_id)`.
+2. `fundBurner(InEuint128 amount, address burner)` on Arb Sepolia hook (real cofhejs sealed input via `cogito /fhe/encrypt`).
+3. Bridge USDC treasury (Arb Sepolia) → burner (Polygon Amoy) via Bridge Kit forwarder.
+4. Submit Polymarket CLOB order signed by the burner key.
 
-From serious predictions to playful simulations, we let every "what if" see its outcome, making it possible to predict anything.
+**`/resolve`:**
+1. Bridge proceeds burner (Polygon Amoy) → treasury (Arb Sepolia).
+2. `markResolved(position_id, payout)` encrypted on the hook.
+3. `settle(position_id)` — encrypted credit to treasury.
 
-## 🌐 Live Demo
+The privacy property: an on-chain observer sees one anonymous burner EOA per position, no link back to the treasury, and the funding amount as an `euint128` handle. **The fund's positions are public; its capital allocation is private.**
 
-Welcome to visit our online demo environment and experience a prediction simulation on trending public opinion events we've prepared for you: [mirofish-live-demo](https://666ghj.github.io/mirofish-demo/)
+---
 
-## 📸 Screenshots
+## Quickstart
 
-<div align="center">
-<table>
-<tr>
-<td><img src="./static/image/Screenshot/运行截图1.png" alt="Screenshot 1" width="100%"/></td>
-<td><img src="./static/image/Screenshot/运行截图2.png" alt="Screenshot 2" width="100%"/></td>
-</tr>
-<tr>
-<td><img src="./static/image/Screenshot/运行截图3.png" alt="Screenshot 3" width="100%"/></td>
-<td><img src="./static/image/Screenshot/运行截图4.png" alt="Screenshot 4" width="100%"/></td>
-</tr>
-<tr>
-<td><img src="./static/image/Screenshot/运行截图5.png" alt="Screenshot 5" width="100%"/></td>
-<td><img src="./static/image/Screenshot/运行截图6.png" alt="Screenshot 6" width="100%"/></td>
-</tr>
-</table>
-</div>
+### Prereqs
 
-## 🎬 Demo Videos
+- macOS or Linux.
+- [`uv`](https://docs.astral.sh/uv/) (Python services) — `brew install uv`.
+- [`bun`](https://bun.sh/) ≥ 1.3 (cogito sidecar) — `brew install oven-sh/bun/bun`.
+- [`foundry`](https://book.getfoundry.sh/) (contracts) — `curl -L https://foundry.paradigm.xyz | bash && foundryup`.
+- A funded **Arbitrum Sepolia** EOA (treasury) and an **Arbitrum Sepolia 0G Galileo** wallet (cogito signer). Faucets: [arb-sepolia](https://www.alchemy.com/faucets/arbitrum-sepolia), [0g](https://faucet.0g.ai) *(intermittent — see [LESSONS.md](./LESSONS.md))*, [polygon-amoy](https://faucet.polygon.technology/).
 
-### 1. Wuhan University Public Opinion Simulation + MiroFish Project Introduction
-
-<div align="center">
-<a href="https://www.bilibili.com/video/BV1VYBsBHEMY/" target="_blank"><img src="./static/image/武大模拟演示封面.png" alt="MiroFish Demo Video" width="75%"/></a>
-
-Click the image to watch the complete demo video for prediction using BettaFish-generated "Wuhan University Public Opinion Report"
-</div>
-
-### 2. Dream of the Red Chamber Lost Ending Simulation
-
-<div align="center">
-<a href="https://www.bilibili.com/video/BV1cPk3BBExq" target="_blank"><img src="./static/image/红楼梦模拟推演封面.jpg" alt="MiroFish Demo Video" width="75%"/></a>
-
-Click the image to watch MiroFish's deep prediction of the lost ending based on hundreds of thousands of words from the first 80 chapters of "Dream of the Red Chamber"
-</div>
-
-> **Financial Prediction**, **Political News Prediction** and more examples coming soon...
-
-## 🔄 Workflow
-
-1. **Graph Building**: Seed extraction & Individual/collective memory injection & GraphRAG construction
-2. **Environment Setup**: Entity relationship extraction & Persona generation & Agent configuration injection
-3. **Simulation**: Dual-platform parallel simulation & Auto-parse prediction requirements & Dynamic temporal memory updates
-4. **Report Generation**: ReportAgent with rich toolset for deep interaction with post-simulation environment
-5. **Deep Interaction**: Chat with any agent in the simulated world & Interact with ReportAgent
-
-## 🚀 Quick Start
-
-### Option 1: Source Code Deployment (Recommended)
-
-#### Prerequisites
-
-| Tool | Version | Description | Check Installation |
-|------|---------|-------------|-------------------|
-| **Node.js** | 18+ | Frontend runtime, includes npm | `node -v` |
-| **Python** | ≥3.11, ≤3.12 | Backend runtime | `python --version` |
-| **uv** | Latest | Python package manager | `uv --version` |
-
-#### 1. Configure Environment Variables
+### One-shot demo
 
 ```bash
-# Copy the example configuration file
-cp .env.example .env
-
-# Edit the .env file and fill in the required API keys
+cp .env.example .env       # fill in keys + RPC URLs
+make install               # uv sync + bun install + forge install
+make demo                  # boots cogito (5003) + signal-gateway (5002) + execution-router (5004) + orchestrator (one tick)
 ```
 
-**Required Environment Variables:**
+Then open the operator dashboard at **http://127.0.0.1:5004/** and watch positions flow through `funding → bridged → open → resolving → settled`.
 
-```env
-# LLM API Configuration (supports any LLM API with OpenAI SDK format)
-# Recommended: Alibaba Qwen-plus model via Bailian Platform: https://bailian.console.aliyun.com/
-# High consumption, try simulations with fewer than 40 rounds first
-LLM_API_KEY=your_api_key
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL_NAME=qwen-plus
-
-# Zep Cloud Configuration
-# Free monthly quota is sufficient for simple usage: https://app.getzep.com/
-ZEP_API_KEY=your_zep_api_key
-```
-
-#### 2. Install Dependencies
+### Manual control
 
 ```bash
-# One-click installation of all dependencies (root + frontend + backend)
-npm run setup:all
+make cogito                # cogito sidecar (Bun, :5003)
+make signal                # signal-gateway (Flask, :5002)
+make execution             # execution-router (Flask, :5004) — also serves dashboard at /
+make orchestrator-once     # single tick: scan → rank → open up to N positions
+make orchestrator-loop     # daemon loop (interval = $ORCHESTRATOR_INTERVAL_S)
+make orchestrator-dry      # daemon, log-only, never hits /open
+make contracts-test        # forge test --via-ir (38/38)
+make stop                  # kill any service started by `make demo`
 ```
 
-Or install step by step:
+### Graceful degradation
 
-```bash
-# Install Node dependencies (root + frontend)
-npm run setup
+Every sidecar is optional and the upstream caller falls back:
 
-# Install Python dependencies (backend, auto-creates virtual environment)
-npm run setup:backend
+| Missing | Fallback |
+|---|---|
+| `BURNER_SEED` | execution-router /open returns 500 (hard-required) |
+| `MERIDIAN_HOOK_ADDRESS` / `ARB_SEPOLIA_RPC_URL` | offline mode — synthetic tx hashes, dashboard still walks the state machine |
+| `COGITO_URL` | `DryRunEncryptor` + `DryRunBridgeClient` (chain submission would revert; useful for wiring tests) |
+| `KEEPERHUB_API_KEY` | tx submitted directly by treasury EOA |
+| `LLM_PROVIDER!=0g` | direct OpenAI; `seed_hash_0g` / `simulation_hash_0g` populate as `null` |
+| AXL down | `SWARM_BACKEND=lite` → single-LLM stand-in |
+
+This is a hackathon — graceful is the point. Demos still run when sponsors' testnets blip.
+
+---
+
+## Repo layout
+
+```
+meridian-core/
+├── contracts/                Foundry. PrivateSettlementHook + HybridFHERC20 (fhUSDC).
+│   └── script/               Deploy + pool-create + swap scripts.
+├── services/
+│   ├── meridian_signal/      Flask :5002 — Polymarket scanner + swarm gateway.
+│   ├── swarm_runner/         3-node Gensyn AXL mesh (SWARM_BACKEND=axl).
+│   ├── cogito/               Hono+Bun :5003 — wraps 0G Storage, 0G Compute, Bridge Kit, cofhejs.
+│   ├── execution_router/     Flask :5004 — burner EOAs + bridge + CLOB + KeeperHub. Serves dashboard.
+│   ├── orchestrator/         Autonomous CLI loop (`python -m orchestrator [once|dry|loop]`).
+│   └── README.md             Full env table + per-service docs.
+├── backend/                  Upstream MiroFish (Python). Don't modify; we sit beside it.
+├── frontend/                 Upstream MiroFish (Node). Untouched in this branch.
+├── .context/meridian/        Spec, build plan, sponsor docs (LLM context dir).
+├── CLAUDE.md                 Agent-facing context (phase table, conventions).
+├── LESSONS.md                Append-only running log of gotchas + rationale.
+├── INJECTION_POINTS.md       Where MERIDIAN hooks into upstream MiroFish.
+├── Makefile                  see Quickstart above.
+└── .env.example              all required + optional env vars with safe placeholders.
 ```
 
-#### 3. Start Services
+Sponsor docs live at [`.context/meridian/sponsor-docs/`](./.context/meridian/sponsor-docs/) — one markdown per sponsor with the actual API/SDK we used.
 
-```bash
-# Start both frontend and backend (run from project root)
-npm run dev
-```
+---
 
-**Service URLs:**
-- Frontend: `http://localhost:3000`
-- Backend API: `http://localhost:5001`
+## Tech debt
 
-**Start Individually:**
+See [`LESSONS.md`](./LESSONS.md) for the running log. Active items:
 
-```bash
-npm run backend   # Start backend only
-npm run frontend  # Start frontend only
-```
+- **0G Galileo testnet faucet outage** blocks the live `seed_hash_0g` demo bar. Code path is exercised via the graceful-`null` fallback. Re-test when faucet recovers.
+- **`BASE_SEPOLIA_RPC_URL` soft-deprecation** — `hook_client` honors it as a fallback so old `.env`s don't silently go offline. Hard-rename in Phase 6.
+- **cofhejs init cost** — first `/fhe/encrypt` call downloads FHE public keys + TFHE WASM. Cached after that.
 
-### Option 2: Docker Deployment
+## License
 
-```bash
-# 1. Configure environment variables (same as source deployment)
-cp .env.example .env
-
-# 2. Pull image and start
-docker compose up -d
-```
-
-Reads `.env` from root directory by default, maps ports `3000 (frontend) / 5001 (backend)`
-
-> Mirror address for faster pulling is provided as comments in `docker-compose.yml`, replace if needed.
-
-## 📬 Join the Conversation
-
-<div align="center">
-<img src="./static/image/QQ群.png" alt="QQ Group" width="60%"/>
-</div>
-
-&nbsp;
-
-The MiroFish team is recruiting full-time/internship positions. If you're interested in multi-agent simulation and LLM applications, feel free to send your resume to: **mirofish@shanda.com**
-
-## 📄 Acknowledgments
-
-**MiroFish has received strategic support and incubation from Shanda Group!**
-
-MiroFish's simulation engine is powered by **[OASIS (Open Agent Social Interaction Simulations)](https://github.com/camel-ai/oasis)**, We sincerely thank the CAMEL-AI team for their open-source contributions!
-
-## 📈 Project Statistics
-
-<a href="https://www.star-history.com/#666ghj/MiroFish&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=666ghj/MiroFish&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=666ghj/MiroFish&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=666ghj/MiroFish&type=date&legend=top-left" />
- </picture>
-</a>
+Forked from [666ghj/MiroFish](https://github.com/666ghj/MiroFish). MERIDIAN-specific code is MIT (see [`LICENSE`](./LICENSE)). Upstream attribution preserved in [`README-ZH.md`](./README-ZH.md).

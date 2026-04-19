@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MIROSHARK TERMINAL</title>
+<link rel="stylesheet" href="/static/terminal.css" />
+<style>
+  /* ── journey-specific overlays (not in design ref) ── */
+
+  /* act ribbons: each section gets a numbered chip in the card header */
+  .act-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #fff; color: var(--blu); font-weight: 700;
+    padding: 0 6px; margin-right: 8px; border: 1px solid #fff;
+    letter-spacing: 0.18em;
+  }
+
+  /* act 1 — intel */
+  .intel-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 0; }
+  .intel-board { border-right: 1px solid var(--blu); display: flex; flex-direction: column; min-height: 0; }
+  .intel-board-toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 12px; border-bottom: 1px dashed var(--gry-2);
+  }
+  .intel-board-toolbar .lbl { color: var(--gry); letter-spacing: 0.16em; font-size: 10px; }
+  .market-list { padding: 4px 0; font-size: 11px; max-height: 280px; overflow: auto; }
+  .market-row {
+    display: grid; grid-template-columns: 32px 1fr 80px 90px;
+    gap: 8px; align-items: baseline; padding: 8px 12px;
+    border-bottom: 1px dashed var(--gry-2); cursor: pointer;
+  }
+  .market-row:hover { background: var(--gry-3); }
+  .market-row.is-sel { background: var(--blu); color: #fff; }
+  .market-row.is-sel .meta, .market-row.is-sel .rank { color: rgba(255,255,255,0.85); }
+  .market-row .rank { color: var(--blu); font-weight: 700; letter-spacing: 0.06em; }
+  .market-row .q { font-weight: 700; }
+  .market-row .meta { color: var(--gry); font-size: 10px; letter-spacing: 0.04em; }
+  .market-row .liq { text-align: right; color: var(--blu); font-weight: 700; }
+  .market-row .tier-pill { justify-self: end; }
+
+  .posture { padding: 12px 14px; display: flex; flex-direction: column; gap: 14px; }
+  .posture-row { display: flex; align-items: baseline; justify-content: space-between; }
+  .posture-row .lbl { color: var(--gry); letter-spacing: 0.16em; font-size: 10px; }
+  .posture-row .val { color: var(--blu); font-weight: 700; font-size: 22px; line-height: 1; letter-spacing: -0.01em; }
+  .posture-row .val.dn { color: var(--dn); }
+  .posture-cta {
+    display: block; text-align: center; padding: 8px 10px; margin-top: 4px;
+    background: var(--blu); color: #fff; font-weight: 700; letter-spacing: 0.16em; font-size: 11px;
+  }
+  .posture-cta:hover { background: #1a1aff; }
+
+  /* act 2 — deliberation */
+  .delib-empty { padding: 24px 16px; color: var(--gry); font-size: 11px; letter-spacing: 0.04em; }
+  .delib-empty kbd {
+    border: 1px solid var(--blu); padding: 1px 6px; color: var(--blu);
+    font-family: inherit; font-size: 10.5px; margin: 0 2px;
+  }
+  .delib-head {
+    padding: 10px 12px; border-bottom: 1px dashed var(--gry-2);
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  }
+  .delib-head .q { font-weight: 700; }
+  .delib-head .meta { color: var(--gry); font-size: 10px; letter-spacing: 0.06em; margin-top: 2px; }
+  .delib-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .delib-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 0; }
+  .delib-output { padding: 12px 14px; border-right: 1px solid var(--blu); min-height: 220px; }
+  .delib-debate { display: flex; flex-direction: column; min-height: 220px; }
+  .delib-debate .feed { padding: 8px 12px; flex: 1; overflow: auto; max-height: 260px; }
+  .delib-feed-empty { color: var(--gry); font-size: 11px; }
+
+  .swarm-line { padding: 3px 0; border-bottom: 1px dashed var(--gry-2); font-size: 10.5px; line-height: 1.45; }
+  .swarm-line .who { color: var(--blu); font-weight: 700; }
+  .swarm-line .conf { color: var(--gry); }
+  .swarm-line.err .who { color: var(--dn); }
+  .swarm-line.start { background: var(--blu-soft); padding: 6px 8px; }
+  .swarm-line.result { background: var(--blu); color: #fff; padding: 6px 8px; }
+  .swarm-line.result .who { color: #fff; }
+
+  /* verdict ribbon: the key "what should we do" surface */
+  .verdict-ribbon {
+    border-top: 1px solid var(--blu);
+    background: var(--blu-soft);
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    align-items: center;
+  }
+  .verdict-ribbon.empty { background: #fff; color: var(--gry); }
+  .verdict-ribbon .vlabel { font-size: 10px; letter-spacing: 0.18em; color: var(--gry); }
+  .verdict-ribbon .vmain { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; color: var(--blu); margin-top: 2px; }
+  .verdict-ribbon .vmeta { font-size: 10.5px; color: var(--fg); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .verdict-ribbon .vmeta b { color: var(--blu); }
+  .verdict-ribbon .badge-att { display: inline-block; border: 1px solid var(--blu); padding: 1px 6px; font-size: 10px; letter-spacing: 0.1em; color: var(--blu); }
+  .verdict-ribbon .badge-att.bad { color: var(--dn); border-color: var(--dn); }
+
+  .open-form {
+    display: flex; gap: 6px; align-items: center;
+    background: #fff; padding: 6px 8px; border: 1px solid var(--blu);
+  }
+  .open-form input {
+    width: 80px; font-family: inherit; font-size: 11px; padding: 4px 6px;
+    border: 1px solid var(--blu); background: #fff; color: var(--fg); text-align: right;
+  }
+  .open-form .unit { color: var(--gry); font-size: 10px; letter-spacing: 0.1em; }
+
+  /* act 3 — execution */
+  .exec-empty {
+    padding: 24px 16px; color: var(--gry); font-size: 11px; letter-spacing: 0.04em;
+  }
+  .pos-card {
+    border-top: 1px dashed var(--gry-2);
+    padding: 12px 14px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .pos-card:first-of-type { border-top: none; }
+  .pos-card.is-active { background: var(--blu-soft); }
+  .pos-card .pos-h {
+    grid-column: 1 / -1;
+    display: flex; justify-content: space-between; align-items: center;
+    padding-bottom: 6px; border-bottom: 1px solid var(--blu);
+  }
+  .pos-card .pos-h .pos-id { font-weight: 700; color: var(--blu); letter-spacing: 0.04em; }
+  .pos-card .pos-h .pos-meta { color: var(--gry); font-size: 10px; letter-spacing: 0.06em; }
+  .pos-card .pos-h .pos-actions { display: flex; gap: 6px; }
+  .pos-facts { font-size: 11px; }
+  .pos-facts table { width: 100%; }
+  .pos-facts td { padding: 3px 0; border-bottom: 1px dashed var(--gry-2); vertical-align: top; }
+  .pos-facts td:first-child { color: var(--gry); letter-spacing: 0.06em; padding-right: 12px; width: 40%; }
+  .pos-facts a { color: var(--blu); text-decoration: none; }
+  .pos-facts a:hover { text-decoration: underline; }
+
+  /* the audit timeline — proof-of-execution */
+  .timeline { font-size: 10.5px; line-height: 1.4; padding-left: 14px; position: relative; }
+  .timeline::before {
+    content: ''; position: absolute; left: 4px; top: 4px; bottom: 4px;
+    border-left: 1px dashed var(--gry-2);
+  }
+  .tl-event { position: relative; padding: 4px 0 4px 4px; }
+  .tl-event::before {
+    content: ''; position: absolute; left: -14px; top: 8px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--blu);
+  }
+  .tl-event.err::before { background: var(--dn); }
+  .tl-event.skip::before { background: #fff; border: 1px solid var(--gry-2); }
+  .tl-event .ev { font-weight: 700; color: var(--blu); letter-spacing: 0.04em; }
+  .tl-event.err .ev { color: var(--dn); }
+  .tl-event .when { color: var(--gry); font-size: 9.5px; letter-spacing: 0.06em; margin-left: 6px; }
+  .tl-event .pl { display: block; color: var(--fg); font-size: 10px; margin-top: 1px; word-break: break-all; }
+  .tl-event .pl a { color: var(--blu); }
+  .tl-empty { color: var(--gry); padding: 8px 0; }
+
+  .dim { color: var(--gry); }
+
+  .badge { display: inline-block; padding: 1px 6px; font-size: 9px; letter-spacing: 0.1em;
+           font-weight: 700; border: 1px solid var(--blu); color: var(--blu); }
+  .badge.s-funding { background: #fff; color: var(--blu); }
+  .badge.s-open { background: var(--blu); color: #fff; }
+  .badge.s-resolving { background: #fff; color: var(--blu); }
+  .badge.s-settled { background: var(--blu); color: #fff; }
+  .badge.s-failed { background: var(--dn); color: #fff; border-color: var(--dn); }
+
+  /* execution history: collapsed by default */
+  .pos-history-h {
+    padding: 8px 12px; border-top: 1px solid var(--blu); background: var(--gry-3);
+    display: flex; justify-content: space-between; align-items: center; cursor: pointer;
+    font-size: 10.5px; letter-spacing: 0.16em; color: var(--gry); font-weight: 700;
+  }
+  .pos-history-h .chev::before { content: '▸'; margin-right: 6px; color: var(--blu); }
+  .pos-history-h.open .chev::before { content: '▾'; }
+  .pos-history-body { display: none; }
+  .pos-history-body.open { display: block; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ─── statusbar ─── -->
+  <div class="statusbar">
+    <div class="sb-left">
+      <span class="sb-cell sb-eq">MIROSHARK TERMINAL</span>
+      <span class="sb-cell" id="sb-phase">PHASE —</span>
+      <span class="sb-cell" id="sb-chains">— / —</span>
+    </div>
+    <div class="sb-right">
+      <span class="sb-cell" id="sb-cogito">COGITO ?</span>
+      <span class="sb-cell" id="sb-keeper">KEEPERHUB ?</span>
+      <span class="sb-cell" id="sb-bridge">BRIDGE ?</span>
+      <span class="sb-cell" id="sb-positions">POS 0</span>
+      <span class="sb-cell" id="sb-clock">--:--:--</span>
+    </div>
+  </div>
+
+  <!-- ─── sidebar ─── -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><div class="m-row">M<span>S</span></div><div class="m-row">T<span>R</span></div></div>
+      <div>
+        <div class="brand-name">MIROSHARK</div>
+        <div class="brand-sub">SIGNAL TERMINAL</div>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-h">JOURNEY</div>
+      <ul class="tools">
+        <li class="tool" id="nav-act-1"><div class="tool-row">
+          <span class="tool-code">01</span><span class="tool-name">INTEL</span><span class="tool-dot">●</span>
+        </div><div class="tool-desc">scan markets · read posture</div></li>
+        <li class="tool" id="nav-act-2"><div class="tool-row">
+          <span class="tool-code">02</span><span class="tool-name">DELIBERATE</span><span class="tool-dot off">●</span>
+        </div><div class="tool-desc">swarm verdict · attestation</div></li>
+        <li class="tool" id="nav-act-3"><div class="tool-row">
+          <span class="tool-code">03</span><span class="tool-name">EXECUTE</span><span class="tool-dot off">●</span>
+        </div><div class="tool-desc">fund · bridge · clob · settle</div></li>
+      </ul>
+    </div>
+
+    <div class="side-section">
+      <div class="side-h">SIGNAL INSTRUMENTS</div>
+      <ul class="tools">
+        <li class="tool tool-off" title="not yet wired"><div class="tool-row">
+          <span class="tool-code">E-01</span><span class="tool-name">ENTROPY</span><span class="tool-dot off">●</span>
+        </div><div class="tool-desc">orderbook entropy gauge</div></li>
+        <li class="tool tool-off" title="not yet wired"><div class="tool-row">
+          <span class="tool-code">C-02</span><span class="tool-name">CRYO</span><span class="tool-dot off">●</span>
+        </div><div class="tool-desc">frozen-market scanner</div></li>
+        <li class="tool tool-off" title="not yet wired"><div class="tool-row">
+          <span class="tool-code">T-03</span><span class="tool-name">TOPOLOGY</span><span class="tool-dot off">●</span>
+        </div><div class="tool-desc">cross-venue map</div></li>
+        <li class="tool is-active"><div class="tool-row">
+          <span class="tool-code">S-00</span><span class="tool-name">SWARM</span><span class="tool-dot">●</span>
+        </div><div class="tool-desc">multi-agent forecast (AXL mesh)</div></li>
+      </ul>
+    </div>
+
+    <div class="side-section">
+      <div class="side-h">ALERTS</div>
+      <ul class="alerts" id="alerts"></ul>
+    </div>
+
+    <div class="side-foot">
+      <div class="foot-row"><span>SETTLEMENT</span><span class="mono-blue" id="foot-settle">arb-sepolia</span></div>
+      <div class="foot-row"><span>TRADING</span><span class="mono-blue" id="foot-trade">polygon-amoy</span></div>
+      <div class="foot-row"><span>BRIDGE</span><span class="mono-blue">circle gateway</span></div>
+    </div>
+  </aside>
+
+  <!-- ─── main ─── -->
+  <main class="main">
+
+    <!-- ─── ACT 1 · INTEL ─── -->
+    <section class="card" id="act-1">
+      <div class="card-h">
+        <span><span class="act-chip">01</span>INTEL · MARKETS &amp; POSTURE</span>
+        <span class="card-h-r"><button class="btn" id="btn-scan">SCAN MARKETS</button></span>
+      </div>
+      <div class="intel-grid">
+        <div class="intel-board">
+          <div class="intel-board-toolbar">
+            <span class="lbl">MARKET BOARD · POLYMARKET</span>
+            <span class="lbl" id="board-count">—</span>
+          </div>
+          <div class="market-list" id="market-list">
+            <div class="delib-empty">click <kbd>SCAN MARKETS</kbd> to discover live Polymarket questions</div>
+          </div>
+        </div>
+        <div class="posture">
+          <div class="posture-row">
+            <span class="lbl">OPEN POSITIONS</span>
+            <span class="val" id="posture-open">0</span>
+          </div>
+          <div class="posture-row">
+            <span class="lbl">USDC AT RISK</span>
+            <span class="val" id="posture-risk">$0.00</span>
+          </div>
+          <div class="posture-row">
+            <span class="lbl">SETTLED · LIFETIME</span>
+            <span class="val" id="posture-settled">0</span>
+          </div>
+          <div class="posture-row">
+            <span class="lbl">REALIZED PAYOUT</span>
+            <span class="val" id="posture-payout">$0.00</span>
+          </div>
+          <a class="posture-cta" href="#act-3">JUMP TO EXECUTION ↓</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── ACT 2 · DELIBERATION ─── -->
+    <section class="card" id="act-2">
+      <div class="card-h">
+        <span><span class="act-chip">02</span>DELIBERATION · SWARM &amp; ATTESTATION</span>
+        <span class="card-h-r" id="stream-status">IDLE</span>
+      </div>
+      <div id="delib-body">
+        <div class="delib-empty">
+          pick a market in <kbd>INTEL</kbd>, then run the swarm to produce an attested verdict
+        </div>
+      </div>
+      <div id="verdict-body" class="verdict-ribbon empty">
+        <div>
+          <div class="vlabel">VERDICT</div>
+          <div class="vmain">— no signal yet —</div>
+        </div>
+        <div></div>
+      </div>
+    </section>
+
+    <!-- ─── ACT 3 · EXECUTION ─── -->
+    <section class="card" id="act-3">
+      <div class="card-h">
+        <span><span class="act-chip">03</span>EXECUTION · POSITION TIMELINES</span>
+        <span class="card-h-r" id="exec-summary">0 active · 0 settled</span>
+      </div>
+      <div id="active-positions">
+        <div class="exec-empty">
+          no positions yet — open one from a <kbd>VERDICT</kbd> above to see fund → bridge → clob → settle land here in real time
+        </div>
+      </div>
+      <div class="pos-history-h" id="hist-toggle">
+        <span><span class="chev"></span>HISTORY · SETTLED &amp; FAILED</span>
+        <span class="lbl" id="hist-count">0</span>
+      </div>
+      <div class="pos-history-body" id="history-positions"></div>
+    </section>
+  </main>
+
+  <!-- ─── ticker ─── -->
+  <div class="ticker">
+    <div class="ticker-tag">MIROSHARK</div>
+    <div class="ticker-rail">
+      <div class="ticker-track" id="ticker-track">
+        <span class="tk"><span class="tk-mark up">●</span><span class="tk-sym">0G</span><span class="tk-px">storage + compute</span></span>
+        <span class="tk-sep">·</span>
+        <span class="tk"><span class="tk-mark up">●</span><span class="tk-sym">GENSYN</span><span class="tk-px">3-node axl mesh</span></span>
+        <span class="tk-sep">·</span>
+        <span class="tk"><span class="tk-mark up">●</span><span class="tk-sym">FHENIX</span><span class="tk-px">cofhejs · InEuint128</span></span>
+        <span class="tk-sep">·</span>
+        <span class="tk"><span class="tk-mark up">●</span><span class="tk-sym">UNISWAP</span><span class="tk-px">v4 hook · privatesettlement</span></span>
+        <span class="tk-sep">·</span>
+        <span class="tk"><span class="tk-mark up">●</span><span class="tk-sym">CIRCLE</span><span class="tk-px">gateway · arb⇄amoy</span></span>
+        <span class="tk-sep">·</span>
+        <span class="tk"><span class="tk-mark up">●</span><span class="tk-sym">KEEPERHUB</span><span class="tk-px">tx wrapper</span></span>
+        <span class="tk-sep">·</span>
+        <span class="tk"><span class="tk-mark up">●</span><span class="tk-sym">POLYMARKET</span><span class="tk-px">clob · burner eoa</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/*
+  MiroShark Terminal — operator console.
+
+  The page is structured as a 3-act journey rather than a flat dashboard:
+    ACT 1 INTEL         scan markets, read fund posture
+    ACT 2 DELIBERATION  one-shot signal or live swarm debate, with a
+                        verdict ribbon that anchors the OPEN POSITION CTA
+    ACT 3 EXECUTION     per-position cards whose audit-log timeline is the
+                        proof-of-execution story (fund → bridge → clob →
+                        bridge ← settle). Settled / failed positions roll
+                        into a collapsed history below.
+
+  Backends:
+    - signal-gateway  :5002 (markets/scan, run, runs/stream)   [CORS *]
+    - execution-router :5004 (open, resolve, positions, audit, positions/stream)
+
+  The execution-router is same-origin (this file is served from :5004),
+  so /api/execution/* and /health are relative.
+*/
+
+const SIGNAL = window.MIROSHARK_SIGNAL_URL || `http://${location.hostname}:5002`;
+
+// ── helpers ──
+const shorten  = (s, n = 10) => !s ? '' : (s.length <= n + 2 ? s : s.slice(0, n) + '…');
+const fmtTime  = t => t ? new Date(t * 1000).toLocaleTimeString() : '';
+const fmtUsd   = v => `$${(Number(v) || 0).toFixed(2)}`;
+const fmtPp    = v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}pp`;
+const escapeHtml = s => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Tx links use chain-aware explorers because the user genuinely needs to tell
+// Arb Sepolia tx (settlement-side hook calls + outbound bridge) apart from
+// Polygon Amoy tx (CLOB orders + inbound bridge deposit).
+const explorer = net => net === 'trading'
+  ? 'https://amoy.polygonscan.com'
+  : 'https://sepolia.arbiscan.io';
+const txLink = (h, net = 'settlement') => h
+  ? `<a href="${explorer(net)}/tx/${h}" target="_blank" rel="noreferrer">${shorten(h, 12)}</a>`
+  : '<span class="dim">—</span>';
+const addrLink = (a, net = 'settlement') => a
+  ? `<a href="${explorer(net)}/address/${a}" target="_blank" rel="noreferrer">${shorten(a)}</a>`
+  : '<span class="dim">—</span>';
+
+// ── alerts (sidebar) ──
+let alerts = [];
+function pushAlert(msg, sev = 1) {
+  alerts.unshift({ msg, sev, ts: new Date().toLocaleTimeString() });
+  if (alerts.length > 12) alerts.length = 12;
+  document.getElementById('alerts').innerHTML = alerts.map(a =>
+    `<li class="alert sev-${a.sev}"><div class="alert-time">${a.ts}</div>` +
+    `<div class="alert-msg">${escapeHtml(a.msg)}</div></li>`
+  ).join('');
+}
+
+// ── sidebar journey indicator ──
+// Highlights whichever act the user is currently looking at, so the journey
+// reads as a sequence even though all three acts share one scrollable page.
+function setActIndicator(currentId) {
+  ['nav-act-1', 'nav-act-2', 'nav-act-3'].forEach(id => {
+    const el = document.getElementById(id);
+    const dot = el.querySelector('.tool-dot');
+    if (id === currentId) { el.classList.add('is-active'); dot.classList.remove('off'); }
+    else { el.classList.remove('is-active'); }
+  });
+}
+// When all three acts fit in one viewport (the common case for an empty
+// terminal), no single section is "the" focus — so highlight whichever
+// section the user has most recently scrolled-to or interacted with. On
+// fresh load that's INTEL; after selectMarket() jumps to ACT 2 we update
+// it explicitly. After scrolling we pick whichever section's top is just
+// below the viewport top (the one the user is reading into).
+const ACT_IDS = ['act-1', 'act-2', 'act-3'];
+function refreshActIndicator() {
+  // If the user hasn't scrolled (top of page), default to INTEL.
+  if (window.scrollY < 40) { setActIndicator('nav-act-1'); return; }
+  // Otherwise pick the topmost section whose top is at or above the
+  // viewport top — this is the one the user just scrolled past or onto.
+  let current = 'nav-act-1';
+  for (const id of ACT_IDS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const top = el.getBoundingClientRect().top;
+    if (top <= 100) current = `nav-${id}`;
+  }
+  setActIndicator(current);
+}
+
+// ── statusbar / clock ──
+const tickClock = () => {
+  document.getElementById('sb-clock').textContent =
+    new Date().toLocaleTimeString('en-US', { hour12: false });
+};
+setInterval(tickClock, 1000); tickClock();
+
+// ── /health (execution-router + signal-gateway) ──
+async function refreshHealth() {
+  try {
+    const r = await fetch('/health');
+    const j = await r.json();
+    const w = j.wiring || {}, c = j.chains || {};
+    document.getElementById('sb-phase').textContent = `PHASE ${j.phase || '—'}`;
+    document.getElementById('sb-chains').textContent = `${c.settlement || '—'} ⇄ ${c.trading || '—'}`;
+    document.getElementById('foot-settle').textContent = c.settlement || '—';
+    document.getElementById('foot-trade').textContent = c.trading || '—';
+    document.getElementById('sb-keeper').textContent = `KEEPERHUB ${w.keeperhub ? 'ON' : 'OFF'}`;
+    document.getElementById('sb-bridge').textContent =
+      `BRIDGE ${w.bridge && w.bridge !== 'DryRunBridgeClient' ? 'LIVE' : 'DRY'}`;
+    document.getElementById('sb-positions').textContent = `POS ${j.positions ?? 0}`;
+  } catch (e) {
+    pushAlert(`/health unreachable: ${e.message}`, 2);
+  }
+  try {
+    const r = await fetch(`${SIGNAL}/health`, { mode: 'cors' });
+    const j = await r.json();
+    document.getElementById('sb-cogito').textContent = `COGITO ${j.zg_anchor ? 'ON' : 'OFF'}`;
+  } catch {
+    document.getElementById('sb-cogito').textContent = 'COGITO ?';
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+ *  ACT 1 — INTEL
+ *  Scanned markets are kept keyed by market_id so that, when the
+ *  user runs the swarm, we can join verdict.outcome → token_id
+ *  without a second API call. /api/execution/open requires a
+ *  token_id and the signal-gateway response doesn't include it.
+ * ────────────────────────────────────────────────────────────*/
+const scannedMarkets = new Map();
+let selectedMarket = null;
+
+async function scanMarkets() {
+  const list = document.getElementById('market-list');
+  list.innerHTML = '<div class="delib-empty">scanning…</div>';
+  try {
+    const r = await fetch(`${SIGNAL}/api/signal/markets/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 12, min_liquidity_usd: 5000 }),
+    });
+    const j = await r.json();
+    const markets = j.markets || [];
+    scannedMarkets.clear();
+    for (const m of markets) scannedMarkets.set(m.market_id, m);
+    document.getElementById('board-count').textContent = `${markets.length} candidates`;
+    if (!markets.length) {
+      list.innerHTML = '<div class="delib-empty">no markets matched current filters</div>';
+      return;
+    }
+    // Rank by liquidity as a first-cut "edge potential" proxy. (A real
+    // edge needs the swarm; this just orders the board so the operator
+    // doesn't have to scroll to find the deep markets.)
+    markets.sort((a, b) => (b.liquidity_usd || 0) - (a.liquidity_usd || 0));
+    list.innerHTML = markets.map((m, i) => {
+      const tier = (m.liquidity_usd || 0) >= 50000 ? 'tier-2'
+                 : (m.liquidity_usd || 0) >= 15000 ? 'tier-1' : 'tier-0';
+      return `
+      <div class="market-row" data-id="${m.market_id}">
+        <div class="rank">${String(i + 1).padStart(2, '0')}</div>
+        <div>
+          <div class="q">${escapeHtml(m.question)}</div>
+          <div class="meta">${escapeHtml(m.slug)} · vol ${fmtUsd(m.volume_usd)} · ${(m.outcomes || []).join(' / ')}</div>
+        </div>
+        <div class="liq">${fmtUsd(m.liquidity_usd)}</div>
+        <div class="tier-pill"><span class="tier ${tier}">${tier === 'tier-2' ? 'DEEP' : tier === 'tier-1' ? 'MID' : 'THIN'}</span></div>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.market-row').forEach(row => {
+      row.addEventListener('click', () => selectMarket(row.dataset.id));
+    });
+    pushAlert(`scanned ${markets.length} markets`, 1);
+  } catch (e) {
+    list.innerHTML = `<div class="delib-empty" style="color:var(--dn)">scan failed: ${escapeHtml(e.message)}</div>`;
+    pushAlert(`market scan failed: ${e.message}`, 2);
+  }
+}
+
+function selectMarket(marketId) {
+  const m = scannedMarkets.get(marketId);
+  if (!m) return;
+  selectedMarket = m;
+  document.querySelectorAll('#market-list .market-row').forEach(r => {
+    r.classList.toggle('is-sel', r.dataset.id === marketId);
+  });
+  // Reset DELIBERATION pane and scroll there. The whole point of the
+  // journey layout is that selecting a market hands off intent to act 2.
+  renderDeliberationIdle();
+  document.getElementById('act-2').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setActIndicator('nav-act-2');
+}
+
+/* ─────────────────────────────────────────────────────────────
+ *  ACT 2 — DELIBERATION
+ *  Selecting a market populates the head + buttons; running the
+ *  swarm fills the verdict ribbon, which is the only place
+ *  OPEN POSITION can be initiated.
+ * ────────────────────────────────────────────────────────────*/
+let lastSignal = null;
+
+function renderDeliberationIdle() {
+  const body = document.getElementById('delib-body');
+  if (!selectedMarket) {
+    body.innerHTML = `<div class="delib-empty">pick a market in <kbd>INTEL</kbd> to enable RUN / STREAM</div>`;
+    renderVerdict(null);
+    return;
+  }
+  const m = selectedMarket;
+  body.innerHTML = `
+    <div class="delib-head">
+      <div>
+        <div class="q">${escapeHtml(m.question)}</div>
+        <div class="meta">${escapeHtml(m.slug)} · liq ${fmtUsd(m.liquidity_usd)} · vol ${fmtUsd(m.volume_usd)}</div>
+        <div class="meta">outcomes: ${(m.outcomes || []).map((o, i) =>
+          `${escapeHtml(o)} @ ${(((m.outcome_prices || [])[i] || 0) * 100).toFixed(1)}%`).join(' · ')}</div>
+      </div>
+      <div class="delib-actions">
+        <button class="btn" id="btn-run">RUN SWARM</button>
+        <button class="btn" id="btn-stream">LIVE DEBATE</button>
+      </div>
+    </div>
+    <div class="delib-grid">
+      <div class="delib-output" id="signal-output">
+        <div class="delib-empty">RUN SWARM for a one-shot consensus, or LIVE DEBATE to watch agents argue in real time</div>
+      </div>
+      <div class="delib-debate">
+        <div class="card-h" style="background: var(--gry-3); color: var(--blu);">
+          <span style="letter-spacing:0.18em;font-size:10px;font-weight:700;">LIVE DEBATE STREAM</span>
+        </div>
+        <div class="feed" id="swarm-feed">
+          <div class="delib-feed-empty">— idle —</div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('btn-run').addEventListener('click', runSignal);
+  document.getElementById('btn-stream').addEventListener('click', streamSignal);
+  renderVerdict(null);
+}
+
+async function runSignal() {
+  if (!selectedMarket) return;
+  const out = document.getElementById('signal-output');
+  out.innerHTML = '<div class="delib-empty">running swarm…</div>';
+  try {
+    const r = await fetch(`${SIGNAL}/api/signal/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ market_id: selectedMarket.market_id }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    lastSignal = j;
+    renderSignal(j);
+    renderVerdict(j);
+    pushAlert(`signal: ${j.edge?.outcome || '—'} edge=${j.edge?.edge_pp?.toFixed(1) || '0'}pp`, 2);
+  } catch (e) {
+    out.innerHTML = `<div class="delib-empty" style="color:var(--dn)">run failed: ${escapeHtml(e.message)}</div>`;
+    pushAlert(`signal RUN failed: ${e.message}`, 2);
+  }
+}
+
+function renderSignal(j) {
+  const probs = j.swarm_prediction || {};
+  const probRows = Object.entries(probs).map(([k, v]) =>
+    `<tr><td>${escapeHtml(k)}</td><td>${(v * 100).toFixed(1)}%</td></tr>`
+  ).join('');
+  document.getElementById('signal-output').innerHTML = `
+    <table class="kv">
+      <tr><td>phase</td><td>${escapeHtml(j.phase)}</td></tr>
+      <tr><td>model</td><td>${escapeHtml(j.model)}</td></tr>
+      <tr><td>elapsed</td><td>${j.elapsed_s}s · ${j.contributing_agents || '?'} agents</td></tr>
+      <tr><td>seed_hash_0g</td><td>${j.seed_hash_0g ? `<span class="mono-blue">${shorten(j.seed_hash_0g, 14)}</span>` : '<span class="dim">—</span>'}</td></tr>
+      <tr><td>simulation_hash_0g</td><td>${j.simulation_hash_0g ? `<span class="mono-blue">${shorten(j.simulation_hash_0g, 14)}</span>` : '<span class="dim">—</span>'}</td></tr>
+    </table>
+    <div style="margin-top:10px;font-size:10px;letter-spacing:0.16em;color:var(--gry);">SWARM PREDICTION</div>
+    <table class="kv">${probRows}</table>
+    <div style="margin-top:10px;font-size:11px;line-height:1.5;">${escapeHtml(j.reasoning || '')}</div>`;
+}
+
+function renderVerdict(j) {
+  const el = document.getElementById('verdict-body');
+  if (!j || !j.edge) {
+    el.className = 'verdict-ribbon empty';
+    el.innerHTML = `<div><div class="vlabel">VERDICT</div><div class="vmain">— no signal yet —</div></div><div></div>`;
+    return;
+  }
+  const edge = j.edge;
+  const env = j.attestation_envelope;
+  const valid = env ? env.valid : null;
+  const attBadge = env
+    ? `<span class="badge-att ${valid === false ? 'bad' : ''}">ATTESTED · ${escapeHtml(env.provider || '?')}${valid === false ? ' · INVALID' : ''}</span>`
+    : `<span class="badge-att bad">NO ATTESTATION</span>`;
+  const market = scannedMarkets.get(j.market_id) || selectedMarket || {};
+  const tokenId = lookupTokenId(market, edge.outcome);
+  const ctaDisabled = !tokenId
+    ? 'disabled title="missing token_id — re-scan markets"' : '';
+  el.className = 'verdict-ribbon';
+  el.innerHTML = `
+    <div>
+      <div class="vlabel">VERDICT · ${escapeHtml(j.market_id)}</div>
+      <div class="vmain">${escapeHtml(edge.outcome)} · ${fmtPp(edge.edge_pp)}</div>
+      <div class="vmeta">
+        <span>swarm <b>${(edge.swarm_probability * 100).toFixed(1)}%</b></span>
+        <span>market <b>${(edge.market_probability * 100).toFixed(1)}%</b></span>
+        <span>conf <b>${(j.confidence ?? 0).toFixed(2)}</b></span>
+        <span>${attBadge}</span>
+      </div>
+    </div>
+    <div class="open-form">
+      <span class="unit">USDC</span>
+      <input type="number" id="open-amount" value="25" min="1" step="1" />
+      <button class="btn btn-primary" id="btn-open" ${ctaDisabled}>OPEN POSITION →</button>
+    </div>`;
+  if (tokenId) {
+    document.getElementById('btn-open').addEventListener('click', () => openPositionFromVerdict(j, tokenId));
+  }
+}
+
+function lookupTokenId(market, outcome) {
+  const outcomes = market.outcomes || [];
+  const tokenIds = market.token_ids || [];
+  const i = outcomes.indexOf(outcome);
+  return (i >= 0 && i < tokenIds.length) ? tokenIds[i] : null;
+}
+
+async function openPositionFromVerdict(signal, tokenId) {
+  const amt = parseFloat(document.getElementById('open-amount').value);
+  if (!amt || amt <= 0) { pushAlert('USDC amount required', 2); return; }
+  const positionId = crypto.randomUUID ? crypto.randomUUID()
+    : `pos-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const payload = {
+    position_id: positionId,
+    market_id: signal.market_id,
+    token_id: tokenId,
+    side: 'BUY',
+    usdc_amount: amt,
+  };
+  const btn = document.getElementById('btn-open');
+  btn.disabled = true; btn.textContent = 'OPENING…';
+  try {
+    const r = await fetch('/api/execution/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    pushAlert(`opened ${shorten(positionId, 8)} · ${signal.edge.outcome} ${fmtUsd(amt)}`, 2);
+    activePositionId = positionId;
+    document.getElementById('act-3').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setActIndicator('nav-act-3');
+    // SSE will deliver the position record(s); kick an audit fetch so the
+    // timeline isn't empty during the first SSE tick.
+    fetchAudit(positionId);
+  } catch (e) {
+    pushAlert(`open failed: ${e.message}`, 2);
+    btn.disabled = false; btn.textContent = 'OPEN POSITION →';
+  }
+}
+
+// ── live debate stream (signal-gateway SSE) ──
+let evtSrc = null;
+function streamSignal() {
+  if (!selectedMarket) return;
+  if (evtSrc) { evtSrc.close(); evtSrc = null; }
+  const feed = document.getElementById('swarm-feed');
+  const status = document.getElementById('stream-status');
+  feed.innerHTML = '';
+  status.textContent = 'CONNECTING';
+  const url = `${SIGNAL}/api/signal/runs/stream?market_id=${encodeURIComponent(selectedMarket.market_id)}`;
+  evtSrc = new EventSource(url);
+  const append = (cls, html) => {
+    const div = document.createElement('div');
+    div.className = `swarm-line ${cls || ''}`;
+    div.innerHTML = html;
+    feed.appendChild(div);
+    feed.scrollTop = feed.scrollHeight;
+  };
+  evtSrc.addEventListener('run', (e) => {
+    const d = JSON.parse(e.data);
+    status.textContent = `RUN ${shorten(d.run_id, 8)}`;
+    append('start', `<span class="who">RUN</span> · ${escapeHtml(d.question)} <span class="conf">[${(d.outcomes || []).join(' / ')}]</span>`);
+  });
+  evtSrc.addEventListener('start', (e) => {
+    const d = JSON.parse(e.data);
+    append('start', `<span class="who">SWARM START</span> · ${d.specs} agents · ${d.nodes.length} nodes · ${d.rounds} rounds`);
+  });
+  evtSrc.addEventListener('belief', (e) => {
+    const d = JSON.parse(e.data);
+    const probs = Object.entries(d.probabilities || {})
+      .map(([k, v]) => `${escapeHtml(k)}=${(v * 100).toFixed(0)}%`).join(' ');
+    append('', `<span class="who">${escapeHtml(d.agent_id)}</span> R${d.round} <span class="conf">conf=${d.confidence.toFixed(2)}</span> · ${probs}<div>${escapeHtml(d.reasoning || '')}</div>`);
+  });
+  evtSrc.addEventListener('agent_error', (e) => {
+    const d = JSON.parse(e.data);
+    append('err', `<span class="who">${escapeHtml(d.agent_id)}</span> ERROR · ${escapeHtml(d.error)}`);
+  });
+  evtSrc.addEventListener('result', (e) => {
+    const d = JSON.parse(e.data);
+    const r = d.result || {};
+    const probs = Object.entries(r.consensus || {})
+      .map(([k, v]) => `${escapeHtml(k)}=${(v * 100).toFixed(1)}%`).join(' ');
+    append('result', `<span class="who">CONSENSUS</span> · conf=${r.confidence} · ${probs} · ${r.raw_beliefs} beliefs in ${r.elapsed_s}s`);
+    status.textContent = 'DONE';
+    pushAlert(`SSE consensus ${probs}`, 2);
+    if (evtSrc) { evtSrc.close(); evtSrc = null; }
+    // Force a one-shot RUN to get the verdict ribbon populated. The stream
+    // alone gives the consensus distribution but not the edge join with
+    // market prices, so we still need /api/signal/run for the verdict.
+    runSignal();
+  });
+  evtSrc.addEventListener('error', (e) => {
+    if (e.data) {
+      try { append('err', `<span class="who">ERROR</span> ${escapeHtml(JSON.parse(e.data).error)}`); }
+      catch { append('err', '<span class="who">SSE TRANSPORT ERROR</span>'); }
+    }
+    status.textContent = 'ERROR';
+  });
+}
+
+/* ─────────────────────────────────────────────────────────────
+ *  ACT 3 — EXECUTION
+ *  Live position table, but rendered as per-position cards with
+ *  an inline audit timeline. SSE delivers position deltas; each
+ *  delta triggers a refresh of that position's audit trail so
+ *  the user sees fund_burner.ok → bridge_send.ok → … pop in.
+ * ────────────────────────────────────────────────────────────*/
+const positions = new Map();          // position_id → record
+const auditByPos = new Map();         // position_id → [events]
+const pendingAuditFetch = new Set();
+let activePositionId = null;
+let posStream = null;
+let posPollTimer = null;
+
+function isActive(p) {
+  return p.status !== 'settled' && p.status !== 'failed';
+}
+
+function renderPosture() {
+  const list = Array.from(positions.values());
+  const open = list.filter(p => p.status === 'open' || p.status === 'funding' || p.status === 'resolving').length;
+  const risk = list.filter(p => isActive(p)).reduce((s, p) => s + (Number(p.usdc_amount) || 0), 0);
+  const settled = list.filter(p => p.status === 'settled').length;
+  const payout = list.filter(p => p.status === 'settled')
+    .reduce((s, p) => s + (Number(p.payout_usdc) || 0), 0);
+  document.getElementById('posture-open').textContent = open;
+  document.getElementById('posture-risk').textContent = fmtUsd(risk);
+  document.getElementById('posture-settled').textContent = settled;
+  document.getElementById('posture-payout').textContent = fmtUsd(payout);
+  document.getElementById('exec-summary').textContent = `${open} active · ${settled} settled`;
+  document.getElementById('hist-count').textContent = `${list.length - open}`;
+}
+
+function renderExecution() {
+  renderPosture();
+  const list = Array.from(positions.values()).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  const active = list.filter(isActive);
+  const history = list.filter(p => !isActive(p));
+
+  const activeEl = document.getElementById('active-positions');
+  if (!active.length) {
+    activeEl.innerHTML = `<div class="exec-empty">no active positions — open one from a <kbd>VERDICT</kbd> above to see fund → bridge → clob → settle land here in real time</div>`;
+  } else {
+    activeEl.innerHTML = active.map(renderPositionCard).join('');
+    wireResolveButtons(activeEl);
+  }
+  document.getElementById('history-positions').innerHTML =
+    history.length ? history.map(renderPositionCard).join('') : '';
+}
+
+function renderPositionCard(p) {
+  const events = auditByPos.get(p.position_id) || [];
+  // audit comes back newest-first; reverse for chronological timeline
+  const ordered = events.slice().reverse();
+  const tlHtml = ordered.length
+    ? ordered.map(renderTimelineEvent).join('')
+    : '<div class="tl-empty">no audit events yet</div>';
+  const isAct = activePositionId === p.position_id;
+  const canResolve = p.status === 'open';
+  const resolveBtn = canResolve
+    ? `<button class="btn btn-primary" data-resolve="${p.position_id}">RESOLVE &amp; SETTLE</button>`
+    : '';
+  return `
+    <div class="pos-card ${isAct ? 'is-active' : ''}" data-pos="${p.position_id}">
+      <div class="pos-h">
+        <div>
+          <span class="pos-id">${shorten(p.position_id, 12)}</span>
+          <span class="pos-meta"> · ${escapeHtml(shorten(p.market_id, 14))} · ${escapeHtml(p.side)} ${fmtUsd(p.usdc_amount)}</span>
+        </div>
+        <div class="pos-actions">
+          <span class="badge s-${p.status}">${p.status}</span>
+          ${resolveBtn}
+        </div>
+      </div>
+      <div class="pos-facts">
+        <table>
+          <tr><td>burner</td><td>${addrLink(p.burner_address, 'trading')}</td></tr>
+          <tr><td>fund_burner</td><td>${txLink(p.fund_tx, 'settlement')}</td></tr>
+          <tr><td>bridge → amoy</td><td>${txLink(p.bridge_send_burn_tx, 'settlement')} · ${txLink(p.bridge_send_mint_tx, 'trading')}</td></tr>
+          <tr><td>clob order</td><td>${p.clob_order_id ? `<span class="mono-blue">${shorten(p.clob_order_id, 16)}</span>` : '<span class="dim">—</span>'}</td></tr>
+          <tr><td>gateway deposit</td><td>${txLink(p.gateway_deposit_approve_tx, 'trading')} · ${txLink(p.gateway_deposit_tx, 'trading')}</td></tr>
+          <tr><td>bridge → arb</td><td>${txLink(p.bridge_recv_burn_tx, 'trading')} · ${txLink(p.bridge_recv_mint_tx, 'settlement')}</td></tr>
+          <tr><td>resolve</td><td>${txLink(p.resolve_tx, 'settlement')}</td></tr>
+          <tr><td>settle</td><td>${txLink(p.settle_tx, 'settlement')}</td></tr>
+          <tr><td>payout</td><td>${p.payout_usdc != null ? fmtUsd(p.payout_usdc) : '<span class="dim">—</span>'}</td></tr>
+          ${p.error ? `<tr><td>error</td><td style="color:var(--dn)">${escapeHtml(p.error)}</td></tr>` : ''}
+        </table>
+      </div>
+      <div>
+        <div style="font-size:10px;letter-spacing:0.16em;color:var(--gry);margin-bottom:6px;">PROOF-OF-EXECUTION TIMELINE</div>
+        <div class="timeline">${tlHtml}</div>
+      </div>
+    </div>`;
+}
+
+function renderTimelineEvent(ev) {
+  const cls = ev.status === 'err' ? 'err' : (ev.status === 'skip' ? 'skip' : '');
+  const detail = summariseAuditPayload(ev);
+  return `<div class="tl-event ${cls}">
+    <span class="ev">${escapeHtml(ev.event)}</span>
+    <span class="when">${fmtTime(ev.ts)}</span>
+    ${detail ? `<span class="pl">${detail}</span>` : ''}
+  </div>`;
+}
+
+function summariseAuditPayload(ev) {
+  // Audit payloads vary per event. Pull the field the operator actually
+  // wants to see (tx hash, order id, error message) and link it.
+  const p = ev.payload || {};
+  if (ev.status === 'err' && p.error) return escapeHtml(String(p.error));
+  if (p.tx_hash)            return txLink(p.tx_hash, p.chain === 'trading' ? 'trading' : 'settlement');
+  if (p.fund_tx)            return txLink(p.fund_tx, 'settlement');
+  if (p.burn_tx_hash)       return `burn ${txLink(p.burn_tx_hash, p.source === 'trading' ? 'trading' : 'settlement')}`;
+  if (p.mint_tx_hash)       return `mint ${txLink(p.mint_tx_hash, p.destination === 'trading' ? 'trading' : 'settlement')}`;
+  if (p.transfer_id)        return `transferId ${shorten(p.transfer_id, 16)}`;
+  if (p.clob_order_id)      return `order ${shorten(p.clob_order_id, 16)}`;
+  if (p.execution_id)       return `keeperhub ${shorten(p.execution_id, 16)}`;
+  if (p.resolve_tx)         return txLink(p.resolve_tx, 'settlement');
+  if (p.settle_tx)          return txLink(p.settle_tx, 'settlement');
+  if (p.payout_usdc != null) return `payout ${fmtUsd(p.payout_usdc)}`;
+  return '';
+}
+
+function wireResolveButtons(container) {
+  container.querySelectorAll('button[data-resolve]').forEach(btn => {
+    btn.addEventListener('click', () => resolvePosition(btn.dataset.resolve));
+  });
+}
+
+async function resolvePosition(positionId) {
+  if (!confirm(`Resolve & settle position ${shorten(positionId, 8)}?`)) return;
+  pushAlert(`resolving ${shorten(positionId, 8)}…`, 1);
+  try {
+    const r = await fetch('/api/execution/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position_id: positionId }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    pushAlert(`resolve fired for ${shorten(positionId, 8)}`, 2);
+  } catch (e) {
+    pushAlert(`resolve failed: ${e.message}`, 2);
+  }
+}
+
+async function fetchAudit(positionId) {
+  if (pendingAuditFetch.has(positionId)) return;
+  pendingAuditFetch.add(positionId);
+  try {
+    const r = await fetch(`/api/execution/audit/${encodeURIComponent(positionId)}?limit=200`);
+    const j = await r.json();
+    auditByPos.set(positionId, j.events || []);
+    renderExecution();
+  } catch (e) {
+    pushAlert(`audit fetch failed: ${e.message}`, 2);
+  } finally {
+    pendingAuditFetch.delete(positionId);
+  }
+}
+
+// ── positions stream (SSE-first, polling fallback) ──
+async function pollPositionsOnce() {
+  try {
+    const r = await fetch('/api/execution/positions');
+    const j = await r.json();
+    positions.clear();
+    for (const p of (j.positions || [])) positions.set(p.position_id, p);
+    renderExecution();
+    // backfill audit for whatever we discover
+    for (const id of positions.keys()) if (!auditByPos.has(id)) fetchAudit(id);
+  } catch (e) {
+    pushAlert(`positions fetch failed: ${e.message}`, 2);
+  }
+}
+
+function startPolling() {
+  if (posPollTimer) return;
+  pollPositionsOnce();
+  posPollTimer = setInterval(pollPositionsOnce, 5000);
+}
+function stopPolling() {
+  if (posPollTimer) { clearInterval(posPollTimer); posPollTimer = null; }
+}
+
+function openPositionStream() {
+  if (typeof EventSource === 'undefined') { startPolling(); return; }
+  if (posStream) { try { posStream.close(); } catch {} posStream = null; }
+  let opened = false;
+  const src = new EventSource('/api/execution/positions/stream');
+  posStream = src;
+  src.addEventListener('snapshot', (e) => {
+    opened = true; stopPolling();
+    try {
+      const d = JSON.parse(e.data);
+      positions.clear();
+      for (const p of (d.positions || [])) positions.set(p.position_id, p);
+      renderExecution();
+      for (const id of positions.keys()) fetchAudit(id);
+    } catch (err) { pushAlert(`stream snapshot parse: ${err.message}`, 2); }
+  });
+  src.addEventListener('position', (e) => {
+    try {
+      const p = JSON.parse(e.data);
+      positions.set(p.position_id, p);
+      renderExecution();
+      // every position-record update implies an audit-log row was just
+      // written; pulling the trail keeps the timeline fresh
+      fetchAudit(p.position_id);
+    } catch (err) { pushAlert(`stream delta parse: ${err.message}`, 2); }
+  });
+  src.addEventListener('error', () => {
+    if (!opened) {
+      try { src.close(); } catch {}
+      posStream = null;
+      pushAlert('positions SSE failed — falling back to polling', 2);
+      startPolling();
+    }
+  });
+}
+
+// ── history toggle ──
+document.getElementById('hist-toggle').addEventListener('click', () => {
+  const t = document.getElementById('hist-toggle');
+  const b = document.getElementById('history-positions');
+  t.classList.toggle('open');
+  b.classList.toggle('open');
+});
+
+// ── boot ──
+document.getElementById('btn-scan').addEventListener('click', scanMarkets);
+window.addEventListener('scroll', refreshActIndicator, { passive: true });
+window.addEventListener('resize', refreshActIndicator);
+refreshActIndicator();
+refreshHealth(); setInterval(refreshHealth, 8000);
+openPositionStream();
+pushAlert('terminal online', 2);
+</script>
+</body>
+</html>

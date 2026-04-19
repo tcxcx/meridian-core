@@ -64,3 +64,14 @@ services/swarm_runner/.runtime/
 services/cogito/node_modules/
 services/cogito/dist/
 services/cogito/.bun/
+# MERIDIAN: contracts (Foundry + npm)
+contracts/node_modules/
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/.forge-snapshots/
+contracts/package-lock.json
+# MERIDIAN: per-service runtime state (SQLite, sessions)
+services/*/var/
+.gstack/
+.run/

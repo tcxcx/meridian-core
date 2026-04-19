@@ -27,6 +27,10 @@ class SwarmOutput:
     contributing_agents: list[str]       # AXL agent IDs in Phase 2; [] in Phase 1
     model: str
     phase: str = "1-swarm-lite"
+    # 0G TeeML attestation envelope from cogito /compute/inference. None when
+    # LLM_PROVIDER != "0g" (no TEE attestation available from OpenAI etc.).
+    # Shape: {chat_id, valid, provider, model, ...}
+    attestation_envelope: dict | None = None
 
 
 _SYSTEM_PROMPT = (
@@ -54,8 +58,11 @@ def _chat_json(
     *,
     messages: list[dict[str, str]],
     temperature: float = 0.4,
-) -> tuple[str, str]:
-    """Run a chat completion and return (raw_json_text, model_used).
+) -> tuple[str, str, dict | None]:
+    """Run a chat completion and return (raw_json_text, model_used, envelope).
+
+    `envelope` is the 0G TeeML attestation dict (chat_id, valid, provider, model)
+    when LLM_PROVIDER=0g; None for OpenAI-compatible providers.
 
     Picks backend by env `LLM_PROVIDER`:
       - "0g"      → cogito /compute/inference (DeAIOS, TeeML-verifiable)
@@ -72,7 +79,13 @@ def _chat_json(
             model=model,
             temperature=temperature,
         )
-        return str(res.get("content") or "{}"), str(res.get("model") or model)
+        envelope = {
+            "provider": "0g",
+            "model": str(res.get("model") or model),
+            "chat_id": res.get("chat_id"),
+            "valid": res.get("valid"),
+        }
+        return str(res.get("content") or "{}"), str(res.get("model") or model), envelope
 
     api_key = os.environ["LLM_API_KEY"]
     base_url = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
@@ -84,7 +97,7 @@ def _chat_json(
         messages=messages,
         temperature=temperature,
     )
-    return resp.choices[0].message.content or "{}", model
+    return resp.choices[0].message.content or "{}", model, None
 
 
 def run_swarm_lite(
@@ -100,7 +113,7 @@ def run_swarm_lite(
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": _user_prompt(seed_doc, outcomes)},
     ]
-    raw_text, model_used = _chat_json(messages=messages, temperature=0.4)
+    raw_text, model_used, envelope = _chat_json(messages=messages, temperature=0.4)
     try:
         raw = json.loads(raw_text)
     except json.JSONDecodeError:
@@ -122,6 +135,7 @@ def run_swarm_lite(
         key_factors=[str(x) for x in (raw.get("key_factors") or [])],
         contributing_agents=[],
         model=model_used,
+        attestation_envelope=envelope,
     )
 
 
@@ -149,6 +163,16 @@ def run_swarm_axl(
         agents_per_node=apn,
         rounds=rds,
     )
+    # AXL attestation surface = the node mesh (signed beliefs across N nodes).
+    # If LLM_PROVIDER=0g each agent also produces TEE chat_ids, but we don't
+    # plumb per-agent envelopes through SwarmRunResult yet — topology only.
+    axl_envelope = {
+        "provider": "axl-mesh",
+        "model": os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini"),
+        "nodes": result.node_keys,
+        "beliefs": result.raw_beliefs,
+        "rounds": result.rounds,
+    }
     return SwarmOutput(
         swarm_prediction=result.consensus,
         confidence=result.confidence,
@@ -157,6 +181,7 @@ def run_swarm_axl(
         contributing_agents=result.contributing_agents,
         model=os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini"),
         phase=f"2-axl-mesh ({len(result.node_keys)}-node, {result.raw_beliefs} beliefs)",
+        attestation_envelope=axl_envelope,
     )
 
 

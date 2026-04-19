@@ -28,6 +28,8 @@ import { z } from "zod";
 
 import { ZgClient } from "./zg.js";
 import { ComputeClient, TESTNET_PROVIDERS } from "./compute.js";
+import { createBridgeRoutes } from "./bridge.js";
+import { createFheRoutes } from "./fhe.js";
 
 const REQUIRED_ENV = ["ZG_RPC_URL", "ZG_INDEXER_URL", "ZG_PRIVATE_KEY", "COGITO_TOKEN"] as const;
 for (const k of REQUIRED_ENV) {
@@ -55,6 +57,14 @@ const compute = new ComputeClient({
 });
 
 console.log(`cogito: signer address ${zg.address}`);
+
+const bridgeRoutes = createBridgeRoutes();
+console.log(`cogito: bridge route ${bridgeRoutes.ready ? "ready" : "offline (set TREASURY_PRIVATE_KEY)"}`);
+
+const fheRoutes = createFheRoutes();
+console.log(
+  `cogito: fhe route ${fheRoutes.ready ? `ready (signer ${fheRoutes.signer})` : "offline (set FHE_PRIVATE_KEY/TREASURY_PRIVATE_KEY + FHE_RPC_URL/ARB_SEPOLIA_RPC_URL)"}`,
+);
 
 // ── middleware ────────────────────────────────────────────────────────────────
 
@@ -113,9 +123,14 @@ app.get("/health", (c) => c.json({
   signer: zg.address,
   rpc: process.env.ZG_RPC_URL,
   indexer: process.env.ZG_INDEXER_URL,
-  capabilities: ["storage", "compute"],
+  capabilities: ["storage", "compute", "bridge", "fhe"],
+  bridge: { ready: bridgeRoutes.ready },
+  fhe: { ready: fheRoutes.ready, signer: fheRoutes.signer },
   models: Object.keys(TESTNET_PROVIDERS),
 }));
+
+app.route("/bridge", bridgeRoutes.router);
+app.route("/fhe", fheRoutes.router);
 
 const UploadBody = z.object({
   kind: z.enum(["seed", "simulation", "other"]),
