@@ -75,3 +75,4 @@ contracts/package-lock.json
 services/*/var/
 .gstack/
 .run/
+.env.qa

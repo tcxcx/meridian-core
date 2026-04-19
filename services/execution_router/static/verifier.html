@@ -288,11 +288,14 @@
       if (!r.ok) return;
       const body = await r.json();
       const ids = (body.tenants || []).map(t => t.tenant_id);
-      if (ids.length === 0) return;
-      tenantSelect.innerHTML = ids.map(id =>
+      // Always offer the implicit default tenant — /tenants omits it when
+      // TENANTS env is set, but the legacy /verifier/<date> URL still maps
+      // to it and we want operators to be able to pick it explicitly.
+      const all = ids.includes(DEFAULT_TENANT) ? ids : [DEFAULT_TENANT, ...ids];
+      tenantSelect.innerHTML = all.map(id =>
         `<option value="${id}"${id === activeTenant ? " selected" : ""}>${id}</option>`
       ).join("");
-      if (!ids.includes(activeTenant)) {
+      if (!all.includes(activeTenant)) {
         // URL referenced an unknown tenant — keep it visible but flag it.
         const opt = document.createElement("option");
         opt.value = activeTenant;
@@ -333,14 +336,16 @@
     return `<a class="hash" href="${escapeHtml(base + hash)}" target="_blank" rel="noopener">${escapeHtml(label)} ${escapeHtml(trunc(hash, 14))}</a>`;
   }
 
-  function renderEmpty(date) {
+  function renderEmpty(date, tenant) {
+    const qs = tenant && tenant !== DEFAULT_TENANT
+      ? `?tenant_id=${encodeURIComponent(tenant)}` : "";
     return `
       <div class="card">
         <div class="card-h"><span>NO PACK FOR ${escapeHtml(date)}</span></div>
         <div class="empty-state">
           NO ATTESTATION PACK BUILT FOR THIS DATE.<br/><br/>
           BUILD ONE WITH:<br/>
-          <code>POST /api/execution/daily-pack/${escapeHtml(date)}/build</code>
+          <code>POST /api/execution/daily-pack/${escapeHtml(date)}/build${escapeHtml(qs)}</code>
         </div>
       </div>
     `;
@@ -508,7 +513,7 @@
       const qs = tenant && tenant !== DEFAULT_TENANT ? `?tenant_id=${encodeURIComponent(tenant)}` : "";
       const r = await fetch(`/api/execution/daily-pack/${date}${qs}`);
       if (r.status === 404) {
-        root.innerHTML = renderEmpty(date);
+        root.innerHTML = renderEmpty(date, tenant);
         return;
       }
       if (!r.ok) {
