@@ -1,12 +1,19 @@
-"""Autonomous loop.
+"""Autonomous loop — Strategy/Allocator runtime.
 
-Stateful iteration:
-    scan markets → run swarm on each → rank by |edge_pp| → pick top N that
-    clear `MIN_EDGE_PP` and aren't already open → POST /api/execution/open.
+Per tick, for each loaded strategy:
+    markets = strategy.scan()
+    for m in markets: candidates += [strategy.evaluate(m)]
+Then rank all candidates across strategies by |edge_pp|*confidence,
+ask the Allocator how much each strategy may spend, and dispatch the
+top N that clear caps to /api/execution/open.
 
-State-of-the-world tracker is intentionally in-memory — the router has
-the canonical record on-chain + in PositionStore, so restarting the loop
-just re-fills `self._seen` from `/api/execution/positions`.
+The Allocator is the only thing that knows total exposure across
+strategies; risk caps and drawdown halts (Bucket 3) layer on top.
+
+Hydration on boot: pulls /api/execution/positions and re-fills both
+the (strategy,market_id) dedupe map and the Allocator. Until Bucket 6
+adds a `strategy` column to PositionStore, hydrated positions default
+to the "directional" strategy for back-compat with Phase 5 records.
 """
 from __future__ import annotations
 
@@ -14,10 +21,14 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 import httpx
+
+from .allocator import Allocator, AllocatorConfig
+from .strategies import Signal, Strategy, load_strategies
 
 log = logging.getLogger("meridian.orchestrator")
 
@@ -28,18 +39,36 @@ class LoopConfig:
     execution_url: str = "http://127.0.0.1:5004"
     interval_s: float = 60.0
     max_positions_per_cycle: int = 1
+    dry_run: bool = False
+
+    # Strategy configuration
+    strategies: list[str] = field(default_factory=lambda: ["directional"])
+    # Per-strategy weights (name → weight). Allocator normalises.
+    strategy_weights: dict[str, Decimal] = field(default_factory=dict)
+    # Per-strategy caps (name → max simultaneous notional USDC).
+    strategy_caps: dict[str, Decimal] = field(default_factory=dict)
+
+    # Allocator globals
+    total_capital: Decimal = Decimal("100")
+    per_position_max: Decimal = Decimal("25")
+    global_max_open_positions: int = 10
+
+    # Directional-strategy params (passed via load_strategies kwargs)
     min_edge_pp: float = 3.0
     min_confidence: float = 0.55
     usdc_per_position: float = 5.0
     scan_limit: int = 10
-    scan_min_liquidity_usd: float = 5000.0
-    dry_run: bool = False  # log would-be trades without POSTing /open
+    scan_min_liquidity_usd: float = 5_000.0
 
     @classmethod
     def from_env(cls) -> "LoopConfig":
         def _f(key: str, default: float) -> float:
             v = os.environ.get(key)
             return float(v) if v is not None else default
+
+        def _d(key: str, default: Decimal) -> Decimal:
+            v = os.environ.get(key)
+            return Decimal(v) if v is not None else default
 
         def _i(key: str, default: int) -> int:
             v = os.environ.get(key)
@@ -51,17 +80,39 @@ class LoopConfig:
                 return default
             return v.strip().lower() in {"1", "true", "yes", "on"}
 
+        strategies_csv = os.environ.get("ORCHESTRATOR_STRATEGIES", "directional")
+        strategies = [s.strip() for s in strategies_csv.split(",") if s.strip()]
+
+        weights: dict[str, Decimal] = {}
+        caps: dict[str, Decimal] = {}
+        for s in strategies:
+            wkey = f"ORCHESTRATOR_STRATEGY_{s.upper()}_WEIGHT"
+            ckey = f"ORCHESTRATOR_STRATEGY_{s.upper()}_CAP"
+            if os.environ.get(wkey) is not None:
+                weights[s] = Decimal(os.environ[wkey])
+            else:
+                # Default: equal weight across configured strategies.
+                weights[s] = Decimal(1)
+            if os.environ.get(ckey) is not None:
+                caps[s] = Decimal(os.environ[ckey])
+
         return cls(
             signal_url=os.environ.get("SIGNAL_GATEWAY_URL", cls.signal_url),
             execution_url=os.environ.get("EXECUTION_ROUTER_URL", cls.execution_url),
             interval_s=_f("ORCHESTRATOR_INTERVAL_S", cls.interval_s),
             max_positions_per_cycle=_i("ORCHESTRATOR_MAX_POSITIONS", cls.max_positions_per_cycle),
+            dry_run=_b("ORCHESTRATOR_DRY_RUN", cls.dry_run),
+            strategies=strategies,
+            strategy_weights=weights,
+            strategy_caps=caps,
+            total_capital=_d("ORCHESTRATOR_TOTAL_CAPITAL", cls.total_capital),
+            per_position_max=_d("ORCHESTRATOR_PER_POSITION_MAX", cls.per_position_max),
+            global_max_open_positions=_i("ORCHESTRATOR_GLOBAL_MAX_POSITIONS", cls.global_max_open_positions),
             min_edge_pp=_f("ORCHESTRATOR_MIN_EDGE_PP", cls.min_edge_pp),
             min_confidence=_f("ORCHESTRATOR_MIN_CONFIDENCE", cls.min_confidence),
             usdc_per_position=_f("ORCHESTRATOR_USDC_PER_POSITION", cls.usdc_per_position),
             scan_limit=_i("ORCHESTRATOR_SCAN_LIMIT", cls.scan_limit),
             scan_min_liquidity_usd=_f("ORCHESTRATOR_MIN_LIQUIDITY_USD", cls.scan_min_liquidity_usd),
-            dry_run=_b("ORCHESTRATOR_DRY_RUN", cls.dry_run),
         )
 
 
@@ -70,19 +121,54 @@ class Orchestrator:
         self.cfg = cfg
         self._signal = httpx.Client(base_url=cfg.signal_url, timeout=60.0)
         self._exec = httpx.Client(base_url=cfg.execution_url, timeout=60.0)
-        # market_id → position_id for positions opened this process
-        self._opened: dict[str, str] = {}
+
+        # Allocator owns capital accounting across strategies.
+        self.allocator = Allocator(AllocatorConfig(
+            total_capital=cfg.total_capital,
+            per_strategy_weights=dict(cfg.strategy_weights),
+            per_strategy_caps=dict(cfg.strategy_caps),
+            global_max_open_positions=cfg.global_max_open_positions,
+            per_position_max=cfg.per_position_max,
+        ))
+
+        # Load strategies. Each strategy gets the deps it accepts.
+        self.strategies: list[Strategy] = load_strategies(
+            cfg.strategies,
+            signal_client=self._signal,
+            min_edge_pp=cfg.min_edge_pp,
+            min_confidence=cfg.min_confidence,
+            usdc_per_position=cfg.usdc_per_position,
+            scan_limit=cfg.scan_limit,
+            scan_min_liquidity_usd=cfg.scan_min_liquidity_usd,
+        )
+
+        # Dedupe: (strategy, market_id) → position_id. Stops a strategy from
+        # re-trading the same market this process. Two strategies CAN both
+        # touch the same market (e.g. directional + arb on Trump-2028).
+        self._opened: dict[tuple[str, str], str] = {}
 
     def hydrate_from_router(self) -> None:
-        """Pre-fill `_opened` from the router's PositionStore so restarts don't double-trade."""
+        """Pre-fill `_opened` + Allocator from the router's PositionStore."""
         try:
             r = self._exec.get("/api/execution/positions")
             r.raise_for_status()
-            for rec in r.json().get("positions", []):
-                self._opened[rec["market_id"]] = rec["position_id"]
-            log.info("hydrated %d existing positions from router", len(self._opened))
+            records = r.json().get("positions", [])
         except httpx.HTTPError as e:
             log.warning("hydrate failed (router down?): %s", e)
+            return
+
+        hydrated: list[tuple[str, str, float]] = []
+        for rec in records:
+            # Pre-Bucket-6 records have no `strategy` field; default directional.
+            strat = rec.get("strategy") or "directional"
+            mid = rec.get("market_id")
+            pid = rec.get("position_id")
+            if mid and pid:
+                self._opened[(strat, mid)] = pid
+            hydrated.append((pid, strat, float(rec.get("usdc_amount") or 0)))
+        self.allocator.hydrate(hydrated)
+        log.info("hydrated %d positions across %d (strategy,market) pairs",
+                 len(hydrated), len(self._opened))
 
     def tick(self) -> dict[str, Any]:
         """One iteration. Returns a summary for logging/dashboard."""
@@ -92,66 +178,65 @@ class Orchestrator:
             "candidates": 0,
             "opened": [],
             "skipped": [],
+            "allocator": self.allocator.snapshot(),
         }
-        try:
-            scanned = self._scan()
-        except httpx.HTTPError as e:
-            log.error("scan failed: %s", e)
-            return summary
-        summary["scanned"] = len(scanned)
 
-        # Skip markets we've already traded this process.
-        fresh = [m for m in scanned if m["market_id"] not in self._opened]
-        ranked: list[dict[str, Any]] = []
-
-        for market in fresh:
+        # Phase 1 — scan + evaluate, pooling Signals across strategies.
+        all_signals: list[Signal] = []
+        for strat in self.strategies:
             try:
-                run = self._run_signal(market["market_id"])
-            except httpx.HTTPError as e:
-                log.warning("run failed for %s: %s", market["market_id"], e)
+                markets = strat.scan()
+            except Exception as e:  # noqa: BLE001 — keep loop alive on plugin errors
+                log.exception("strategy %s scan crashed: %s", strat.name, e)
                 continue
-            summary["evaluated"] += 1
+            summary["scanned"] += len(markets)
 
-            edge = run.get("edge") or {}
-            edge_pp = float(edge.get("edge_pp") or 0.0)
-            confidence = float(run.get("confidence_adjusted") or run.get("confidence") or 0.0)
+            for m in markets:
+                # Don't re-evaluate markets this strategy already opened.
+                mid = m.get("market_id")
+                if mid and (strat.name, mid) in self._opened:
+                    continue
+                try:
+                    sig = strat.evaluate(m)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("strategy %s evaluate crashed for %s: %s", strat.name, mid, e)
+                    continue
+                summary["evaluated"] += 1
+                if sig is None:
+                    continue
+                all_signals.append(sig)
 
-            if abs(edge_pp) < self.cfg.min_edge_pp or confidence < self.cfg.min_confidence:
+        all_signals.sort(key=Signal.rank_key, reverse=True)
+        summary["candidates"] = len(all_signals)
+
+        # Phase 2 — dispatch with allocator gating.
+        opened_this_tick = 0
+        strategy_lookup = {s.name: s for s in self.strategies}
+        for sig in all_signals:
+            if opened_this_tick >= self.cfg.max_positions_per_cycle:
+                break
+            strat = strategy_lookup.get(sig.strategy)
+            if strat is None:
+                summary["skipped"].append({"market_id": sig.market_id, "reason": f"no_strategy:{sig.strategy}"})
+                continue
+            budget = self.allocator.budget_for(sig.strategy)
+            size = strat.size(sig, budget)
+            ok, reason = self.allocator.can_open(sig.strategy, size)
+            if not ok:
                 summary["skipped"].append({
-                    "market_id": market["market_id"],
-                    "reason": "below_thresholds",
-                    "edge_pp": edge_pp,
-                    "confidence": confidence,
+                    "market_id": sig.market_id,
+                    "strategy": sig.strategy,
+                    "reason": reason,
+                    "size": str(size),
+                    "budget": str(budget),
                 })
                 continue
-
-            token_id = self._token_id_for_outcome(market, edge.get("outcome"))
-            if token_id is None:
-                summary["skipped"].append({"market_id": market["market_id"], "reason": "no_token_id"})
-                continue
-
-            # Positive edge → BUY the outcome; negative edge → swarm disagrees,
-            # so SELL (if we had a position) — for first pass we only open BUYs.
-            if edge_pp <= 0:
-                summary["skipped"].append({"market_id": market["market_id"], "reason": "negative_edge"})
-                continue
-
-            ranked.append({
-                "market": market,
-                "run": run,
-                "edge_pp": edge_pp,
-                "confidence": confidence,
-                "token_id": token_id,
-            })
-
-        ranked.sort(key=lambda c: (c["edge_pp"], c["confidence"]), reverse=True)
-        summary["candidates"] = len(ranked)
-
-        for cand in ranked[: self.cfg.max_positions_per_cycle]:
-            opened = self._open_position(cand)
+            opened = self._open_position(strat, sig, size)
             if opened:
+                opened_this_tick += 1
                 summary["opened"].append(opened)
 
+        summary["allocator"] = self.allocator.snapshot()
         return summary
 
     def run_forever(self) -> None:
@@ -161,7 +246,7 @@ class Orchestrator:
             try:
                 summary = self.tick()
                 log.info(
-                    "tick summary scanned=%d evaluated=%d candidates=%d opened=%d skipped=%d",
+                    "tick scanned=%d evaluated=%d candidates=%d opened=%d skipped=%d",
                     summary["scanned"],
                     summary["evaluated"],
                     summary["candidates"],
@@ -175,62 +260,53 @@ class Orchestrator:
             sleep_for = max(1.0, self.cfg.interval_s - elapsed)
             time.sleep(sleep_for)
 
-    # ------------------- wire helpers -------------------
+    # ------------------- dispatch -------------------
 
-    def _scan(self) -> list[dict[str, Any]]:
-        r = self._signal.post(
-            "/api/signal/markets/scan",
-            json={"limit": self.cfg.scan_limit, "min_liquidity_usd": self.cfg.scan_min_liquidity_usd},
-        )
-        r.raise_for_status()
-        return r.json().get("markets", [])
-
-    def _run_signal(self, market_id: str) -> dict[str, Any]:
-        r = self._signal.post("/api/signal/run", json={"market_id": market_id})
-        r.raise_for_status()
-        return r.json()
-
-    @staticmethod
-    def _token_id_for_outcome(market: dict[str, Any], outcome: str | None) -> str | None:
-        if outcome is None:
-            return None
-        outcomes = market.get("outcomes") or []
-        token_ids = market.get("token_ids") or market.get("clobTokenIds") or []
-        if not outcomes or not token_ids:
-            return None
-        try:
-            idx = outcomes.index(outcome)
-        except ValueError:
-            return None
-        return token_ids[idx] if idx < len(token_ids) else None
-
-    def _open_position(self, candidate: dict[str, Any]) -> dict[str, Any] | None:
-        market = candidate["market"]
+    def _open_position(self, strategy: Strategy, signal: Signal, size: Decimal) -> dict[str, Any] | None:
         position_id = str(uuid.uuid4())
         payload = {
             "position_id": position_id,
-            "market_id": market["market_id"],
-            "token_id": candidate["token_id"],
-            "side": "BUY",
-            "usdc_amount": self.cfg.usdc_per_position,
+            "market_id": signal.market_id,
+            "token_id": signal.token_id,
+            "side": signal.side,
+            "usdc_amount": float(size),
+            # Sent for forward-compat; today's execution-router ignores
+            # unknown fields. Bucket 6 will persist it as a column.
+            "strategy": signal.strategy,
+            "venue": signal.venue,
         }
+
         if self.cfg.dry_run:
-            log.info("[dry_run] would open %s on %s edge=%.2fpp", position_id, market["market_id"], candidate["edge_pp"])
-            self._opened[market["market_id"]] = position_id
+            log.info("[dry_run] would open strat=%s pos=%s market=%s edge=%.2fpp size=%s",
+                     signal.strategy, position_id, signal.market_id, signal.edge_pp, size)
+            self._opened[(signal.strategy, signal.market_id)] = position_id
+            self.allocator.record_open(signal.strategy, position_id, size)
+            try:
+                strategy.on_open(signal, position_id, size)
+            except Exception as e:  # noqa: BLE001
+                log.warning("on_open hook crashed: %s", e)
             return {**payload, "dry_run": True}
 
         try:
             r = self._exec.post("/api/execution/open", json=payload)
         except httpx.HTTPError as e:
-            log.error("open failed for %s: %s", market["market_id"], e)
+            log.error("open failed for %s: %s", signal.market_id, e)
             return None
         if r.status_code >= 400:
             log.error("open rejected %s: %s", r.status_code, r.text)
             return None
-        self._opened[market["market_id"]] = position_id
+
+        self._opened[(signal.strategy, signal.market_id)] = position_id
+        self.allocator.record_open(signal.strategy, position_id, size)
+        try:
+            strategy.on_open(signal, position_id, size)
+        except Exception as e:  # noqa: BLE001
+            log.warning("on_open hook crashed: %s", e)
+
         body = r.json()
         log.info(
-            "opened position=%s market=%s edge=%.2fpp clob=%s",
-            position_id, market["market_id"], candidate["edge_pp"], body.get("clob_status"),
+            "opened strat=%s pos=%s market=%s edge=%.2fpp size=%s clob=%s",
+            signal.strategy, position_id, signal.market_id,
+            signal.edge_pp, size, body.get("clob_status"),
         )
         return body
