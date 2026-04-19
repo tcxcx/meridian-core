@@ -23,11 +23,13 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from .allocator import Allocator, AllocatorConfig
+from .risk import RiskConfig, RiskEngine
 from .strategies import Signal, Strategy, load_strategies
 
 log = logging.getLogger("meridian.orchestrator")
@@ -131,6 +133,14 @@ class Orchestrator:
             per_position_max=cfg.per_position_max,
         ))
 
+        # Risk Engine owns sticky halts (drawdown, heartbeat, manual kill,
+        # cluster cap). Layered on top of Allocator capital math.
+        state_dir = Path(__file__).parent / "var"
+        self.risk = RiskEngine(RiskConfig.from_env(
+            state_dir=state_dir,
+            total_capital=cfg.total_capital,
+        ))
+
         # Load strategies. Each strategy gets the deps it accepts.
         self.strategies: list[Strategy] = load_strategies(
             cfg.strategies,
@@ -221,6 +231,15 @@ class Orchestrator:
                 continue
             budget = self.allocator.budget_for(sig.strategy)
             size = strat.size(sig, budget)
+            ok, reason = self.risk.check_open(strategy=sig.strategy, size=size, token_id=sig.token_id)
+            if not ok:
+                summary["skipped"].append({
+                    "market_id": sig.market_id,
+                    "strategy": sig.strategy,
+                    "reason": f"risk:{reason}",
+                    "size": str(size),
+                })
+                continue
             ok, reason = self.allocator.can_open(sig.strategy, size)
             if not ok:
                 summary["skipped"].append({
@@ -241,24 +260,28 @@ class Orchestrator:
 
     def run_forever(self) -> None:
         self.hydrate_from_router()
-        while True:
-            t0 = time.perf_counter()
-            try:
-                summary = self.tick()
-                log.info(
-                    "tick scanned=%d evaluated=%d candidates=%d opened=%d skipped=%d",
-                    summary["scanned"],
-                    summary["evaluated"],
-                    summary["candidates"],
-                    len(summary["opened"]),
-                    len(summary["skipped"]),
-                )
-            except Exception as e:  # noqa: BLE001 — keep the daemon alive
-                log.exception("tick crashed: %s", e)
+        self.risk.start_watchdog()
+        try:
+            while True:
+                t0 = time.perf_counter()
+                try:
+                    summary = self.tick()
+                    log.info(
+                        "tick scanned=%d evaluated=%d candidates=%d opened=%d skipped=%d",
+                        summary["scanned"],
+                        summary["evaluated"],
+                        summary["candidates"],
+                        len(summary["opened"]),
+                        len(summary["skipped"]),
+                    )
+                except Exception as e:  # noqa: BLE001 — keep the daemon alive
+                    log.exception("tick crashed: %s", e)
 
-            elapsed = time.perf_counter() - t0
-            sleep_for = max(1.0, self.cfg.interval_s - elapsed)
-            time.sleep(sleep_for)
+                elapsed = time.perf_counter() - t0
+                sleep_for = max(1.0, self.cfg.interval_s - elapsed)
+                time.sleep(sleep_for)
+        finally:
+            self.risk.stop_watchdog()
 
     # ------------------- dispatch -------------------
 
@@ -281,6 +304,8 @@ class Orchestrator:
                      signal.strategy, position_id, signal.market_id, signal.edge_pp, size)
             self._opened[(signal.strategy, signal.market_id)] = position_id
             self.allocator.record_open(signal.strategy, position_id, size)
+            self.risk.record_open(position_id=position_id, strategy=signal.strategy,
+                                  size=size, token_id=signal.token_id)
             try:
                 strategy.on_open(signal, position_id, size)
             except Exception as e:  # noqa: BLE001
@@ -298,6 +323,8 @@ class Orchestrator:
 
         self._opened[(signal.strategy, signal.market_id)] = position_id
         self.allocator.record_open(signal.strategy, position_id, size)
+        self.risk.record_open(position_id=position_id, strategy=signal.strategy,
+                              size=size, token_id=signal.token_id)
         try:
             strategy.on_open(signal, position_id, size)
         except Exception as e:  # noqa: BLE001

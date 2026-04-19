@@ -401,6 +401,38 @@ def create_app() -> Flask:
             },
         )
 
+    @bp.post("/kill")
+    def kill_switch():
+        """Manual operator kill — closes all open positions, halts further work.
+
+        Bucket 3 of autonomous-fund-arb. Token-gated; if EXECUTION_KILL_TOKEN
+        is unset the endpoint returns 503 (kill switch disabled). Marks each
+        open position as `failed` with `error="killed"` and writes an audit
+        entry per position. Does NOT call the bridge or hook — those would
+        require operator-funded gas; killing is an off-chain accounting halt.
+        """
+        token_env = os.environ.get("EXECUTION_KILL_TOKEN")
+        if not token_env:
+            return jsonify({"error": "kill switch disabled — set EXECUTION_KILL_TOKEN to enable"}), 503
+        provided = request.headers.get("X-Kill-Token")
+        if provided != token_env:
+            return Response(status=403)
+        closed = 0
+        errors: list[dict] = []
+        for r in store.list():
+            if r.status in ("settled", "failed"):
+                continue
+            try:
+                r.status = "failed"
+                r.error = "killed"
+                store.upsert(r)
+                _audit("kill.invoked", position_id=r.position_id, status="info",
+                       payload={"prior_status": r.status})
+                closed += 1
+            except Exception as e:  # noqa: BLE001
+                errors.append({"position_id": r.position_id, "error": str(e)})
+        return jsonify({"closed": closed, "errors": errors})
+
     @bp.get("/audit")
     def list_audit():
         try:
