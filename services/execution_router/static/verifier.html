@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MIROSHARK / VERIFIER</title>
+<link rel="stylesheet" href="/static/terminal.css" />
+<style>
+  /* ── verifier-only styling: brutalist white + electric blue + JetBrains Mono ── */
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px;
+    letter-spacing: 0.01em;
+  }
+  .vshell { padding: 0; min-height: 100vh; }
+
+  .vbar {
+    background: var(--blu);
+    color: #fff;
+    padding: 12px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--blu);
+    letter-spacing: 0.18em;
+  }
+  .vbar h1 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+  }
+  .vbar .right { font-size: 11px; opacity: 0.92; }
+
+  .vmain {
+    padding: 18px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 18px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  .card {
+    border: 1px solid var(--blu);
+    background: #fff;
+  }
+  .card-h {
+    background: var(--blu);
+    color: #fff;
+    padding: 6px 12px;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    font-weight: 700;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .card-b { padding: 12px 14px; }
+
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+  }
+  .meta-cell {
+    padding: 10px 14px;
+    border-right: 1px dashed var(--gry-2);
+    border-bottom: 1px dashed var(--gry-2);
+  }
+  .meta-cell:nth-child(4n) { border-right: none; }
+  .meta-cell .lbl { color: var(--gry); font-size: 10px; letter-spacing: 0.18em; }
+  .meta-cell .val { color: var(--blu); font-weight: 700; font-size: 18px; line-height: 1.1; margin-top: 4px; letter-spacing: -0.01em; }
+  .meta-cell .val.dn { color: var(--dn); }
+  .meta-cell .val.fg { color: var(--fg); font-size: 13px; word-break: break-all; }
+
+  .root-block {
+    padding: 14px;
+    background: var(--blu-soft);
+    display: grid;
+    grid-template-columns: 140px 1fr auto;
+    gap: 14px;
+    align-items: center;
+    border-top: 1px dashed var(--blu);
+  }
+  .root-block.empty { background: #fff; color: var(--gry); }
+  .root-block .lbl { color: var(--gry); font-size: 10px; letter-spacing: 0.18em; }
+  .root-block .hash {
+    font-weight: 700;
+    color: var(--blu);
+    word-break: break-all;
+    font-size: 12px;
+  }
+  .root-block .copy-btn {
+    background: var(--blu);
+    color: #fff;
+    border: 1px solid var(--blu);
+    padding: 4px 10px;
+    letter-spacing: 0.16em;
+    font-size: 10px;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .root-block .copy-btn:hover { background: #1a1aff; }
+  .root-block .copy-btn.ghost { background: #fff; color: var(--blu); }
+
+  .ptable { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .ptable th, .ptable td {
+    padding: 8px 10px;
+    border-bottom: 1px dashed var(--gry-2);
+    text-align: left;
+    vertical-align: top;
+  }
+  .ptable th {
+    color: var(--gry);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    border-bottom: 1px solid var(--blu);
+    background: #fff;
+    font-weight: 700;
+  }
+  .ptable td.num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .ptable td.num.up { color: var(--blu); }
+  .ptable td.num.dn { color: var(--dn); }
+  .ptable td .pid { font-weight: 700; color: var(--blu); }
+  .ptable td .strat {
+    display: inline-block; padding: 1px 6px;
+    border: 1px solid var(--blu); color: var(--blu);
+    font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
+  }
+  .ptable td .strat.arb { background: var(--blu); color: #fff; }
+  .ptable td .side {
+    display: inline-block; padding: 1px 5px;
+    border: 1px solid var(--fg); color: var(--fg);
+    font-size: 9.5px; letter-spacing: 0.16em;
+  }
+  .ptable td a {
+    color: var(--blu);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--blu);
+  }
+  .ptable td a:hover { background: var(--blu); color: #fff; border-bottom: 1px solid var(--blu); }
+  .ptable td .hash {
+    color: var(--gry);
+    font-size: 10px;
+    word-break: break-all;
+    display: block;
+    margin-top: 2px;
+  }
+  .ptable td .hash a { color: var(--blu); }
+
+  .empty-state {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--gry);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+  }
+  .empty-state code {
+    color: var(--blu);
+    background: var(--blu-soft);
+    padding: 2px 6px;
+    font-family: inherit;
+  }
+
+  .err-state {
+    padding: 16px 18px;
+    background: #fff;
+    border: 1px solid var(--dn);
+    color: var(--dn);
+    margin: 18px;
+  }
+
+  .footer {
+    padding: 12px 18px;
+    color: var(--gry);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    border-top: 1px dashed var(--gry-2);
+    text-align: center;
+  }
+  .footer a { color: var(--blu); }
+
+  .date-nav {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .date-nav input {
+    border: 1px solid #fff;
+    background: transparent;
+    color: #fff;
+    font-family: inherit;
+    font-size: 11px;
+    padding: 2px 6px;
+    letter-spacing: 0.04em;
+  }
+  .date-nav input::-webkit-calendar-picker-indicator { filter: invert(1); }
+  .date-nav button {
+    border: 1px solid #fff;
+    background: #fff;
+    color: var(--blu);
+    padding: 2px 8px;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .date-nav button:hover { background: var(--blu); color: #fff; }
+</style>
+</head>
+<body>
+<div class="vshell">
+  <div class="vbar">
+    <h1>MIROSHARK / VERIFIER <span class="cursor">█</span></h1>
+    <div class="right">
+      <div class="date-nav">
+        <span style="opacity:.8;">DATE</span>
+        <input type="date" id="date-input" />
+        <button id="date-go">LOAD</button>
+      </div>
+    </div>
+  </div>
+  <div class="vmain" id="root">
+    <div class="empty-state">LOADING<span class="cursor">█</span></div>
+  </div>
+  <div class="footer">
+    DAILY ATTESTATION PACK · SCHEMA <code style="color:var(--blu);">meridian/daily-pack/v1</code> · ROOT HASH PINS TO 0G STORAGE
+  </div>
+</div>
+<script>
+(() => {
+  const root = document.getElementById("root");
+  const input = document.getElementById("date-input");
+  const go = document.getElementById("date-go");
+
+  function dateFromUrl() {
+    const m = window.location.pathname.match(/\/verifier\/(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+    const d = new Date();
+    return d.toISOString().slice(0, 10);
+  }
+
+  function setUrl(date) {
+    const url = `/verifier/${date}`;
+    if (window.location.pathname !== url) {
+      window.history.pushState({ date }, "", url);
+    }
+  }
+
+  function fmtUsdc(n) {
+    if (n == null) return "—";
+    const sign = n > 0 ? "+" : (n < 0 ? "−" : "");
+    return sign + Math.abs(n).toFixed(2);
+  }
+  function fmtTs(ts) {
+    if (!ts) return "—";
+    const d = new Date(ts * 1000);
+    return d.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  }
+  function escapeHtml(s) {
+    if (s == null) return "";
+    return String(s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+  function trunc(s, n=12) {
+    if (!s) return "";
+    if (s.length <= n) return s;
+    return s.slice(0, n) + "…";
+  }
+  function chainTxLink(base, hash, label) {
+    if (!hash) return `<span class="hash">—</span>`;
+    if (!base) return `<span class="hash">${escapeHtml(trunc(hash, 18))}</span>`;
+    return `<a class="hash" href="${escapeHtml(base + hash)}" target="_blank" rel="noopener">${escapeHtml(label)} ${escapeHtml(trunc(hash, 14))}</a>`;
+  }
+
+  function renderEmpty(date) {
+    return `
+      <div class="card">
+        <div class="card-h"><span>NO PACK FOR ${escapeHtml(date)}</span></div>
+        <div class="empty-state">
+          NO ATTESTATION PACK BUILT FOR THIS DATE.<br/><br/>
+          BUILD ONE WITH:<br/>
+          <code>POST /api/execution/daily-pack/${escapeHtml(date)}/build</code>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderError(msg) {
+    return `<div class="err-state">VERIFIER ERROR · ${escapeHtml(msg)}</div>`;
+  }
+
+  function renderPack(payload, date) {
+    const pack = payload.pack;
+    const agg = pack.aggregate;
+    const pinned = payload.pinned || null;
+    const explorer = payload.explorer || {};
+
+    const grossClass = agg.gross_pnl_usdc > 0 ? "" : (agg.gross_pnl_usdc < 0 ? "dn" : "");
+
+    const rootBlock = pinned && pinned.root_hash
+      ? `
+        <div class="root-block">
+          <div class="lbl">0G ROOT HASH</div>
+          <div class="hash" id="root-hash">${escapeHtml(pinned.root_hash)}</div>
+          <div style="display:flex; gap:6px;">
+            <button class="copy-btn ghost" id="copy-root">COPY</button>
+            ${explorer.cogito_download
+              ? `<a class="copy-btn" href="${escapeHtml(explorer.cogito_download + pinned.root_hash)}" target="_blank" rel="noopener">DOWNLOAD</a>`
+              : ""}
+          </div>
+        </div>
+        <div class="root-block" style="background:#fff; padding:8px 14px;">
+          <div class="lbl">CHAIN ANCHOR TX</div>
+          <div class="hash">${pinned.tx_hash ? escapeHtml(pinned.tx_hash) : '—'}</div>
+          <div class="lbl" style="text-align:right;">${pinned.size_bytes != null ? pinned.size_bytes + ' BYTES' : ''}</div>
+        </div>
+      `
+      : `
+        <div class="root-block empty">
+          <div class="lbl">0G ROOT HASH</div>
+          <div class="hash" style="color:var(--gry);">PACK NOT YET PINNED — REBUILD AFTER COGITO IS REACHABLE</div>
+          <div></div>
+        </div>
+      `;
+
+    const aggCard = `
+      <div class="card">
+        <div class="card-h">
+          <span>ACT 01 · DAILY AGGREGATE · ${escapeHtml(date)}</span>
+          <span style="opacity:.85;">GENERATED ${fmtTs(pack.generated_at)}</span>
+        </div>
+        <div class="meta-grid">
+          <div class="meta-cell">
+            <div class="lbl">POSITIONS SETTLED</div>
+            <div class="val">${agg.n_positions}</div>
+          </div>
+          <div class="meta-cell">
+            <div class="lbl">GROSS PnL · USDC</div>
+            <div class="val ${grossClass}">${fmtUsdc(agg.gross_pnl_usdc)}</div>
+          </div>
+          <div class="meta-cell">
+            <div class="lbl">WIN RATE</div>
+            <div class="val">${(agg.win_rate * 100).toFixed(1)}%</div>
+          </div>
+          <div class="meta-cell">
+            <div class="lbl">VOLUME · USDC</div>
+            <div class="val">${fmtUsdc(agg.total_volume_usdc)}</div>
+          </div>
+          <div class="meta-cell">
+            <div class="lbl">WINNERS / LOSERS / FLAT</div>
+            <div class="val fg">${agg.n_winners} / ${agg.n_losers} / ${agg.n_flat}</div>
+          </div>
+          <div class="meta-cell">
+            <div class="lbl">BY STRATEGY</div>
+            <div class="val fg">${
+              Object.entries(agg.by_strategy || {})
+                .map(([k, v]) => `${k.toUpperCase()} · ${v.n_positions} · ${fmtUsdc(v.gross_pnl_usdc)}`)
+                .join("<br/>") || "—"
+            }</div>
+          </div>
+          <div class="meta-cell">
+            <div class="lbl">SCHEMA</div>
+            <div class="val fg">${escapeHtml(pack.schema)}</div>
+          </div>
+          <div class="meta-cell">
+            <div class="lbl">SETTLEMENT / TRADING</div>
+            <div class="val fg">ARB SEPOLIA / POLYGON AMOY</div>
+          </div>
+        </div>
+        ${rootBlock}
+      </div>
+    `;
+
+    const rows = pack.positions.map(p => {
+      const pnlClass = p.pnl_usdc > 0 ? "up" : (p.pnl_usdc < 0 ? "dn" : "");
+      const stratClass = p.strategy === "arb" ? "strat arb" : "strat";
+      const polyMarketLink = p.market_id
+        ? `<a href="${escapeHtml((explorer.polymarket_market || '') + p.market_id)}" target="_blank" rel="noopener">${escapeHtml(trunc(p.market_id, 18))}</a>`
+        : "—";
+      return `
+        <tr>
+          <td>
+            <span class="pid" title="${escapeHtml(p.position_id)}">${escapeHtml(trunc(p.position_id, 18))}</span><br/>
+            <span class="hash" style="color:var(--gry);">${fmtTs(p.updated_at)}</span>
+          </td>
+          <td><span class="${stratClass}">${escapeHtml(p.strategy)}</span></td>
+          <td>${polyMarketLink}<br/><span class="side">${escapeHtml(p.side)}</span></td>
+          <td class="num">${fmtUsdc(p.usdc_amount)}</td>
+          <td class="num">${fmtUsdc(p.payout_usdc)}</td>
+          <td class="num ${pnlClass}">${fmtUsdc(p.pnl_usdc)}</td>
+          <td>
+            ${chainTxLink(explorer.arb_sepolia_tx, p.fund_tx, "FUND")}
+            ${chainTxLink(explorer.arb_sepolia_tx, p.settle_tx, "SETTLE")}
+            ${chainTxLink(explorer.polygon_amoy_tx, p.bridge_send_burn_tx, "GW→PMK")}
+            ${chainTxLink(explorer.polygon_amoy_tx, p.bridge_recv_burn_tx, "PMK→GW")}
+          </td>
+          <td>
+            ${p.attestation_root_hash
+              ? (explorer.cogito_download
+                  ? `<a class="hash" href="${escapeHtml(explorer.cogito_download + p.attestation_root_hash)}" target="_blank" rel="noopener">${escapeHtml(trunc(p.attestation_root_hash, 22))}</a>`
+                  : `<span class="hash">${escapeHtml(trunc(p.attestation_root_hash, 22))}</span>`)
+              : `<span class="hash">—</span>`}
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    const positionsCard = pack.positions.length === 0
+      ? `<div class="card">
+           <div class="card-h"><span>ACT 02 · POSITIONS · 0 SETTLED</span></div>
+           <div class="empty-state">NO SETTLED POSITIONS IN THIS WINDOW.</div>
+         </div>`
+      : `<div class="card">
+           <div class="card-h">
+             <span>ACT 02 · POSITIONS · ${pack.positions.length} SETTLED</span>
+             <span style="opacity:.85;">SORTED BY SETTLE TIME</span>
+           </div>
+           <div style="overflow-x:auto;">
+           <table class="ptable">
+             <thead>
+               <tr>
+                 <th style="min-width:180px;">POSITION · SETTLED</th>
+                 <th>STRATEGY</th>
+                 <th style="min-width:160px;">MARKET / SIDE</th>
+                 <th class="num">SIZE</th>
+                 <th class="num">PAYOUT</th>
+                 <th class="num">PnL</th>
+                 <th style="min-width:240px;">CHAIN ANCHORS</th>
+                 <th style="min-width:200px;">0G PIN</th>
+               </tr>
+             </thead>
+             <tbody>${rows}</tbody>
+           </table>
+           </div>
+         </div>`;
+
+    return aggCard + positionsCard;
+  }
+
+  async function load(date) {
+    setUrl(date);
+    input.value = date;
+    root.innerHTML = `<div class="empty-state">LOADING ${date}<span class="cursor">█</span></div>`;
+    try {
+      const r = await fetch(`/api/execution/daily-pack/${date}`);
+      if (r.status === 404) {
+        root.innerHTML = renderEmpty(date);
+        return;
+      }
+      if (!r.ok) {
+        const txt = await r.text();
+        root.innerHTML = renderError(`HTTP ${r.status} · ${txt.slice(0, 200)}`);
+        return;
+      }
+      const payload = await r.json();
+      root.innerHTML = renderPack(payload, date);
+      const cb = document.getElementById("copy-root");
+      if (cb) {
+        cb.addEventListener("click", () => {
+          const h = document.getElementById("root-hash");
+          if (!h) return;
+          navigator.clipboard?.writeText(h.textContent || "");
+          cb.textContent = "COPIED";
+          setTimeout(() => { cb.textContent = "COPY"; }, 1200);
+        });
+      }
+    } catch (e) {
+      root.innerHTML = renderError(String(e));
+    }
+  }
+
+  go.addEventListener("click", () => {
+    if (input.value && /^\d{4}-\d{2}-\d{2}$/.test(input.value)) {
+      load(input.value);
+    }
+  });
+  input.addEventListener("change", () => {
+    if (input.value && /^\d{4}-\d{2}-\d{2}$/.test(input.value)) {
+      load(input.value);
+    }
+  });
+  window.addEventListener("popstate", () => load(dateFromUrl()));
+
+  load(dateFromUrl());
+})();
+</script>
+</body>
+</html>

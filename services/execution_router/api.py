@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import queue
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -41,6 +42,7 @@ from . import bridge_client as bridge_mod
 from . import burner as burner_mod
 from . import clob_client, encryptor, hook_client
 from . import keeperhub as keeperhub_mod
+from .daily_pack import DailyPackBuilder
 from .encryptor import SealedInput
 from .store import PositionRecord, PositionStore
 
@@ -97,6 +99,7 @@ def create_app() -> Flask:
     hook = hook_client.from_env(encryptor=enc, keeperhub=keeperhub)
     bridge = bridge_mod.from_env()
     pinner = attestation_mod.from_env()  # Bucket 4: per-position 0G attestation
+    daily_pack = DailyPackBuilder(store=store, audit=audit, attestation=pinner)  # Bucket 5
 
     def _audit(event: str, *, position_id: str | None = None, status: str = "ok", payload: dict | None = None) -> None:
         # Audit writes must never break the request flow — swallow + warn.
@@ -533,6 +536,88 @@ def create_app() -> Flask:
             log.warning("audit.recent(%s) failed: %s", position_id, e)
             events = []
         return jsonify({"position_id": position_id, "events": events})
+
+    # ── Bucket 5: daily verifiable PnL attestation pack + public verifier ──
+    #
+    # `/api/execution/daily-pack/<date>/build` (POST) — generate the pack
+    # for date, write to var/daily_packs/<date>.json, pin to 0G if cogito
+    # is wired. Returns the pack envelope plus the pinning result so the
+    # caller (cron, ops dashboard, demo) can record the root_hash.
+    #
+    # `/api/execution/daily-pack/<date>` (GET) — return the cached pack
+    # envelope plus the most recent `daily_pack.pinned` audit entry for
+    # that date so the verifier page can show {root_hash, tx_hash} without
+    # rebuilding. If the pack hasn't been built yet, returns 404.
+    #
+    # `/verifier/<date>` and `/verifier` — static HTML page that fetches
+    # the pack JSON and renders the proof table (per-position root_hashes,
+    # chain explorer links, aggregate PnL).
+
+    @bp.post("/daily-pack/<date>/build")
+    def daily_pack_build(date: str):
+        try:
+            result = daily_pack.build_and_pin(date)
+        except ValueError as e:
+            return jsonify({"error": f"bad date: {e}"}), 400
+        except Exception as e:  # noqa: BLE001
+            log.warning("daily_pack build %s failed: %s", date, e)
+            return jsonify({"error": str(e)}), 500
+        pinned_payload: dict | None = None
+        if result.pinned is not None:
+            pinned_payload = {
+                "root_hash": result.pinned.root_hash,
+                "tx_hash": result.pinned.tx_hash,
+                "size_bytes": result.pinned.size_bytes,
+            }
+            _audit("daily_pack.pinned", payload={
+                "date": date,
+                "root_hash": result.pinned.root_hash,
+                "tx_hash": result.pinned.tx_hash,
+                "size_bytes": result.pinned.size_bytes,
+                "n_positions": result.pack["aggregate"]["n_positions"],
+            })
+        else:
+            _audit("daily_pack.built", status="info", payload={
+                "date": date,
+                "n_positions": result.pack["aggregate"]["n_positions"],
+                "pinned": False,
+            })
+        return jsonify({
+            "pack": result.pack,
+            "pinned": pinned_payload,
+            "written_path": str(result.written_path) if result.written_path else None,
+        })
+
+    @bp.get("/daily-pack/<date>")
+    def daily_pack_get(date: str):
+        try:
+            _ = (datetime.strptime(date, "%Y-%m-%d"))  # noqa: F841
+        except ValueError:
+            return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+        cached = daily_pack.load_local(date)
+        if cached is None:
+            return jsonify({"error": f"no pack for {date}; POST /daily-pack/{date}/build first"}), 404
+        pinned = daily_pack.latest_pin_for(date)
+        return jsonify({
+            "pack": cached,
+            "pinned": pinned,
+            "explorer": {
+                "arb_sepolia_tx": "https://sepolia.arbiscan.io/tx/",
+                "polygon_amoy_tx": "https://amoy.polygonscan.com/tx/",
+                "polymarket_market": "https://polymarket.com/market/",
+                "cogito_download": (os.environ.get("COGITO_PUBLIC_BASE_URL")
+                                    or os.environ.get("COGITO_BASE_URL")
+                                    or "") + "/download/",
+            },
+        })
+
+    @app.get("/verifier")
+    def verifier_today():
+        return send_from_directory(str(static_dir), "verifier.html")
+
+    @app.get("/verifier/<date>")
+    def verifier_date(date: str):  # noqa: ARG001 — date is read by JS from URL
+        return send_from_directory(str(static_dir), "verifier.html")
 
     app.register_blueprint(bp)
     return app
