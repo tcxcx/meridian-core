@@ -202,6 +202,37 @@
   .cryo-mini-row.row-t1 .q::before { content: '▍ '; color: var(--blu); }
   .cryo-empty { color: var(--gry); font-size: 11px; padding: 8px 0; }
 
+  /* T-03 topology — full-width third row inside instr-grid */
+  .instr-full {
+    grid-column: 1 / -1; border-right: none;
+    border-top: 1px solid var(--blu);
+  }
+  .topo-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; }
+  .topo-edges, .topo-clusters { font-size: 10.5px; max-height: 200px; overflow: auto; }
+  .topo-h {
+    font-size: 9px; color: var(--gry); letter-spacing: 0.18em;
+    padding-bottom: 4px; border-bottom: 1px dashed var(--gry-2); margin-bottom: 4px;
+  }
+  .topo-edge {
+    display: grid; grid-template-columns: 1fr auto 1fr 56px;
+    gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--gry-2);
+    align-items: center;
+  }
+  .topo-edge .lab { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-weight: 700; }
+  .topo-edge .arrow { color: var(--gry); font-size: 11px; }
+  .topo-edge .r { text-align: right; color: var(--blu); font-weight: 700; }
+  .topo-edge.neg .r { color: var(--dn); }
+  .topo-cluster {
+    padding: 6px 0; border-bottom: 1px dashed var(--gry-2);
+  }
+  .topo-cluster .csize {
+    color: var(--blu); font-weight: 700; letter-spacing: 0.08em;
+    font-size: 9.5px; margin-right: 6px;
+  }
+  .topo-cluster .clab { color: var(--fg); }
+  .topo-cluster .clab + .clab::before { content: ' · '; color: var(--gry); }
+  .topo-empty { color: var(--gry); font-size: 11px; padding: 4px 0; }
+
   /* execution history: collapsed by default */
   .pos-history-h {
     padding: 8px 12px; border-top: 1px solid var(--blu); background: var(--gry-3);
@@ -267,9 +298,9 @@
         <li class="tool" id="nav-instr-c02"><div class="tool-row">
           <span class="tool-code">C-02</span><span class="tool-name">CRYO</span><span class="tool-dot">●</span>
         </div><div class="tool-desc">frozen-market scanner</div></li>
-        <li class="tool tool-off" title="not yet wired"><div class="tool-row">
-          <span class="tool-code">T-03</span><span class="tool-name">TOPOLOGY</span><span class="tool-dot off">●</span>
-        </div><div class="tool-desc">cross-venue map</div></li>
+        <li class="tool" id="nav-instr-t03"><div class="tool-row">
+          <span class="tool-code">T-03</span><span class="tool-name">TOPOLOGY</span><span class="tool-dot">●</span>
+        </div><div class="tool-desc">market coordination map</div></li>
         <li class="tool is-active"><div class="tool-row">
           <span class="tool-code">S-00</span><span class="tool-name">SWARM</span><span class="tool-dot">●</span>
         </div><div class="tool-desc">multi-agent forecast (AXL mesh)</div></li>
@@ -332,7 +363,7 @@
     <!-- ─── INSTRUMENTS · E-01 ENTROPY × C-02 CRYO ─── -->
     <section class="card" id="instruments">
       <div class="card-h">
-        <span><span class="act-chip">∗</span>SIGNAL INSTRUMENTS · E-01 ENTROPY × C-02 CRYO</span>
+        <span><span class="act-chip">∗</span>SIGNAL INSTRUMENTS · E-01 ENTROPY × C-02 CRYO × T-03 TOPOLOGY</span>
         <span class="card-h-r" id="instr-status">scanning…</span>
       </div>
       <div class="instr-grid">
@@ -354,6 +385,16 @@
           </div>
           <div id="cryo-body">
             <div class="delib-empty">cryo scan loads on boot</div>
+          </div>
+        </div>
+        <div class="instr-cell instr-full">
+          <div class="instr-h">
+            <span class="instr-code">T-03</span>
+            <span class="instr-name">TOPOLOGY</span>
+            <span class="instr-sub" id="topology-meta">cold-start · building history</span>
+          </div>
+          <div id="topology-body">
+            <div class="delib-empty">topology needs ≥6 ticks per token before correlations stabilise</div>
           </div>
         </div>
       </div>
@@ -1180,15 +1221,66 @@ async function refreshCryo() {
   }
 }
 
+async function refreshTopology() {
+  const body = document.getElementById('topology-body');
+  const meta = document.getElementById('topology-meta');
+  try {
+    const r = await fetch(`${SIGNAL}/api/signal/topology?limit=10&min_liquidity_usd=5000`, { mode: 'cors' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    const edges = j.edges || [];
+    const clusters = j.clusters || [];
+    const stats = j.stats || {};
+    meta.textContent = `tracked ${j.tracked || 0}/${j.scanned || 0} · win=${stats.window || '?'} · |r|≥${stats.r_latch ?? '?'}`;
+    if (!edges.length && !clusters.length) {
+      const have = stats.tracked_tokens || 0;
+      const need = stats.min_history || 6;
+      body.innerHTML = `<div class="topo-empty">cold-start · ${have} tokens tracked, need ≥${need} samples each before edges resolve</div>`;
+      return;
+    }
+    const edgeRows = edges.map(e => `
+      <div class="topo-edge ${e.r < 0 ? 'neg' : ''}" title="r=${e.r} over n=${e.n}">
+        <span class="lab">${escapeHtml(e.a_label)}</span>
+        <span class="arrow">${e.r < 0 ? '⇄' : '↔'}</span>
+        <span class="lab">${escapeHtml(e.b_label)}</span>
+        <span class="r">${e.r >= 0 ? '+' : ''}${e.r.toFixed(2)}</span>
+      </div>`).join('') || `<div class="topo-empty">no pairs above threshold yet</div>`;
+    const clusterRows = clusters.map(c => `
+      <div class="topo-cluster">
+        <span class="csize">×${c.size}</span>
+        ${c.labels.map(l => `<span class="clab">${escapeHtml(l)}</span>`).join('')}
+      </div>`).join('') || `<div class="topo-empty">no clusters</div>`;
+    body.innerHTML = `
+      <div class="topo-grid">
+        <div>
+          <div class="topo-h">CORRELATED PAIRS · |r| ≥ ${stats.r_latch}</div>
+          <div class="topo-edges">${edgeRows}</div>
+        </div>
+        <div>
+          <div class="topo-h">CLUSTERS · CONNECTED COMPONENTS</div>
+          <div class="topo-clusters">${clusterRows}</div>
+        </div>
+      </div>`;
+  } catch (e) {
+    body.innerHTML = `<div class="topo-empty" style="color:var(--dn)">topology scan failed: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+let topologyTimer = null;
+
 function startInstruments() {
   refreshCryo();
   refreshEntropyForSelected();
-  if (cryoTimer)    clearInterval(cryoTimer);
-  if (entropyTimer) clearInterval(entropyTimer);
+  refreshTopology();
+  if (cryoTimer)     clearInterval(cryoTimer);
+  if (entropyTimer)  clearInterval(entropyTimer);
+  if (topologyTimer) clearInterval(topologyTimer);
   // Cryo z-score history thickens with every scan, so we want it polling
   // even when no operator is looking. Entropy only matters per-selection.
-  cryoTimer    = setInterval(refreshCryo, 15000);
-  entropyTimer = setInterval(refreshEntropyForSelected, 5000);
+  // Topology builds its own per-token return series — slow poll is fine.
+  cryoTimer     = setInterval(refreshCryo, 15000);
+  entropyTimer  = setInterval(refreshEntropyForSelected, 5000);
+  topologyTimer = setInterval(refreshTopology, 20000);
 }
 
 // ── boot ──

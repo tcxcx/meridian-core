@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from flask import Blueprint, Flask, jsonify, request
 from flask_cors import CORS
 
-from . import _dns_fallback, cryo, entropy, polymarket, seed, swarm, zg_client
+from . import _dns_fallback, cryo, entropy, polymarket, seed, swarm, topology, zg_client
 
 _dns_fallback.install()
 
@@ -200,6 +200,37 @@ def cryo_route():
         "latched": latched,
         "rows": [r.to_dict() for r in rows],
         "stats": cryo.stats(),
+    })
+
+
+@signal_bp.get("/topology")
+def topology_route():
+    """T-03 · cross-market coordination edges + clusters.
+
+    Each call refreshes the rolling mid-price history per token, then
+    recomputes pairwise Pearson correlation on log returns. With <
+    MIN_HISTORY samples per token we return cold-start (edges=[]) and
+    just thicken history.
+    """
+    limit = int(request.args.get("limit", 10))
+    min_liq = float(request.args.get("min_liquidity_usd", 5_000.0))
+    try:
+        out = topology.scan(limit=limit, min_liquidity_usd=min_liq)
+    except Exception as e:  # noqa: BLE001 — never fail the dashboard on signal-side glitches
+        return jsonify({"error": str(e)}), 502
+    return jsonify(out)
+
+
+@signal_bp.get("/topology/correlated")
+def topology_correlated_route():
+    token_id = request.args.get("token_id")
+    if not token_id:
+        return jsonify({"error": "token_id required"}), 400
+    threshold = float(request.args.get("threshold", topology.R_LATCH))
+    return jsonify({
+        "token_id": token_id,
+        "threshold": threshold,
+        "correlated": topology.correlated_with(token_id, threshold=threshold),
     })
 
 
