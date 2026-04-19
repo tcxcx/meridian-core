@@ -186,10 +186,11 @@
 
   .date-nav {
     display: flex;
-    gap: 4px;
+    gap: 8px;
     align-items: center;
   }
-  .date-nav input {
+  .date-nav input,
+  .date-nav select {
     border: 1px solid #fff;
     background: transparent;
     color: #fff;
@@ -198,6 +199,7 @@
     padding: 2px 6px;
     letter-spacing: 0.04em;
   }
+  .date-nav select option { color: var(--fg); background: #fff; }
   .date-nav input::-webkit-calendar-picker-indicator { filter: invert(1); }
   .date-nav button {
     border: 1px solid #fff;
@@ -210,15 +212,30 @@
     cursor: pointer;
   }
   .date-nav button:hover { background: var(--blu); color: #fff; }
+
+  .tenant-pill {
+    display: inline-block;
+    border: 1px solid #fff;
+    padding: 1px 8px;
+    margin-left: 8px;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    font-weight: 700;
+    background: #fff;
+    color: var(--blu);
+  }
+  .tenant-pill.default { background: transparent; color: #fff; border-style: dashed; }
 </style>
 </head>
 <body>
 <div class="vshell">
   <div class="vbar">
-    <h1>MIROSHARK / VERIFIER <span class="cursor">█</span></h1>
+    <h1>MIROSHARK / VERIFIER <span id="tenant-pill" class="tenant-pill default">DEFAULT</span> <span class="cursor">█</span></h1>
     <div class="right">
       <div class="date-nav">
-        <span style="opacity:.8;">DATE</span>
+        <span style="opacity:.8;">TENANT</span>
+        <select id="tenant-select"><option value="default">default</option></select>
+        <span style="opacity:.8; margin-left:6px;">DATE</span>
         <input type="date" id="date-input" />
         <button id="date-go">LOAD</button>
       </div>
@@ -236,18 +253,55 @@
   const root = document.getElementById("root");
   const input = document.getElementById("date-input");
   const go = document.getElementById("date-go");
+  const tenantSelect = document.getElementById("tenant-select");
+  const tenantPill = document.getElementById("tenant-pill");
 
-  function dateFromUrl() {
-    const m = window.location.pathname.match(/\/verifier\/(\d{4}-\d{2}-\d{2})/);
-    if (m) return m[1];
-    const d = new Date();
-    return d.toISOString().slice(0, 10);
+  const DEFAULT_TENANT = "default";
+
+  function parseUrl() {
+    // /verifier/<tenant>/<date> takes precedence; falls back to /verifier/<date>
+    // (legacy single-tenant URL → default tenant) or today's date.
+    const m2 = window.location.pathname.match(/\/verifier\/([a-z0-9_-]+)\/(\d{4}-\d{2}-\d{2})$/i);
+    if (m2) return { tenant: m2[1], date: m2[2] };
+    const m1 = window.location.pathname.match(/\/verifier\/(\d{4}-\d{2}-\d{2})$/);
+    if (m1) return { tenant: DEFAULT_TENANT, date: m1[1] };
+    return { tenant: DEFAULT_TENANT, date: new Date().toISOString().slice(0, 10) };
   }
 
-  function setUrl(date) {
-    const url = `/verifier/${date}`;
+  function setUrl(tenant, date) {
+    const url = tenant === DEFAULT_TENANT
+      ? `/verifier/${date}`
+      : `/verifier/${tenant}/${date}`;
     if (window.location.pathname !== url) {
-      window.history.pushState({ date }, "", url);
+      window.history.pushState({ tenant, date }, "", url);
+    }
+  }
+
+  function paintTenantPill(tenant) {
+    tenantPill.textContent = tenant.toUpperCase();
+    tenantPill.classList.toggle("default", tenant === DEFAULT_TENANT);
+  }
+
+  async function loadTenantList(activeTenant) {
+    try {
+      const r = await fetch("/api/execution/tenants");
+      if (!r.ok) return;
+      const body = await r.json();
+      const ids = (body.tenants || []).map(t => t.tenant_id);
+      if (ids.length === 0) return;
+      tenantSelect.innerHTML = ids.map(id =>
+        `<option value="${id}"${id === activeTenant ? " selected" : ""}>${id}</option>`
+      ).join("");
+      if (!ids.includes(activeTenant)) {
+        // URL referenced an unknown tenant — keep it visible but flag it.
+        const opt = document.createElement("option");
+        opt.value = activeTenant;
+        opt.textContent = activeTenant + " (unknown)";
+        opt.selected = true;
+        tenantSelect.appendChild(opt);
+      }
+    } catch (e) {
+      // /tenants is optional — leave the default-only select alone.
     }
   }
 
@@ -444,12 +498,15 @@
     return aggCard + positionsCard;
   }
 
-  async function load(date) {
-    setUrl(date);
+  async function load(tenant, date) {
+    setUrl(tenant, date);
     input.value = date;
-    root.innerHTML = `<div class="empty-state">LOADING ${date}<span class="cursor">█</span></div>`;
+    if (tenantSelect.value !== tenant) tenantSelect.value = tenant;
+    paintTenantPill(tenant);
+    root.innerHTML = `<div class="empty-state">LOADING ${tenant} · ${date}<span class="cursor">█</span></div>`;
     try {
-      const r = await fetch(`/api/execution/daily-pack/${date}`);
+      const qs = tenant && tenant !== DEFAULT_TENANT ? `?tenant_id=${encodeURIComponent(tenant)}` : "";
+      const r = await fetch(`/api/execution/daily-pack/${date}${qs}`);
       if (r.status === 404) {
         root.innerHTML = renderEmpty(date);
         return;
@@ -476,19 +533,23 @@
     }
   }
 
-  go.addEventListener("click", () => {
-    if (input.value && /^\d{4}-\d{2}-\d{2}$/.test(input.value)) {
-      load(input.value);
-    }
-  });
-  input.addEventListener("change", () => {
-    if (input.value && /^\d{4}-\d{2}-\d{2}$/.test(input.value)) {
-      load(input.value);
-    }
-  });
-  window.addEventListener("popstate", () => load(dateFromUrl()));
+  function currentLoad() {
+    const date = input.value && /^\d{4}-\d{2}-\d{2}$/.test(input.value)
+      ? input.value
+      : parseUrl().date;
+    load(tenantSelect.value || DEFAULT_TENANT, date);
+  }
 
-  load(dateFromUrl());
+  go.addEventListener("click", currentLoad);
+  input.addEventListener("change", currentLoad);
+  tenantSelect.addEventListener("change", currentLoad);
+  window.addEventListener("popstate", () => {
+    const { tenant, date } = parseUrl();
+    load(tenant, date);
+  });
+
+  const initial = parseUrl();
+  loadTenantList(initial.tenant).finally(() => load(initial.tenant, initial.date));
 })();
 </script>
 </body>
