@@ -8,15 +8,13 @@ Forked from [`666ghj/MiroFish`](https://github.com/666ghj/MiroFish). The MiroFis
 
 ## Pitch
 
-> _TODO — drop the 1-page pitch here._
->
-> Frame: privacy gap on Polymarket today (copy-trading, position-size leakage), MERIDIAN's encrypted treasury→burner flow, why this stack (Fhenix CoFHE for encrypted *amounts*, 0G for verifiable inference + storage anchor, Circle CCTP V2 for the only viable Arb↔Polygon route, KeeperHub for relayed tx, Gensyn AXL for swarm consensus).
+Polymarket trades are public. Position sizes leak. Copy-traders front-run. A serious desk that believes in a market for non-trivial size cannot trade it without telegraphing exactly how much they believe. MiroShark fixes that: encrypted sizing on a Fhenix CoFHE Uniswap v4 hook, fresh per-position burner EOAs, Circle Gateway crosschain settlement, Polymarket CLOB execution, all coordinated by a Gensyn AXL swarm and pinned to 0G Storage with a daily verifiable PnL pack anyone can audit. **Multi-tenant out of the box** — fork the kit and run your own confidential fund on the same rails.
+
+Full pitch: [`docs/PITCH.md`](./docs/PITCH.md). 3-minute demo script: [`docs/demo-script.md`](./docs/demo-script.md).
 
 ## Architecture
 
-> _TODO — drop the Mermaid diagram here._
->
-> Suggested swimlanes: Off-chain (Python) · cogito sidecar (TS/Bun) · On-chain (Arb Sepolia + Polygon Amoy). See [`.context/meridian/BUILD_PLAN.md`](./.context/meridian/BUILD_PLAN.md) for source-of-truth.
+See [`docs/arch.svg`](./docs/arch.svg) (rendered) or [`docs/arch.html`](./docs/arch.html) (interactive). Swimlanes: Off-chain (Python) · cogito sidecar (TS/Bun) · On-chain (Arb Sepolia + Polygon Amoy).
 
 ---
 
