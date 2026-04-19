@@ -30,6 +30,7 @@ import httpx
 
 from .allocator import Allocator, AllocatorConfig
 from .encryptor import EncryptedSize, from_env as encryptor_from_env
+from .reconciler import Reconciler, ReconcilerConfig
 from .risk import RiskConfig, RiskEngine
 from .strategies import Signal, Strategy, load_strategies
 
@@ -62,6 +63,15 @@ class LoopConfig:
     usdc_per_position: float = 5.0
     scan_limit: int = 10
     scan_min_liquidity_usd: float = 5_000.0
+
+    # Arb-strategy params (Bucket 2)
+    min_arb_edge_pp: float = 2.0
+    min_arb_score: float = 0.30
+
+    # Reconciler params (Bucket 2)
+    reconciler_interval_s: float = 60.0
+    reconciler_cooldown_s: float = 90.0
+    reconciler_min_close_spread_pp: float = 0.5
 
     @classmethod
     def from_env(cls) -> "LoopConfig":
@@ -116,6 +126,14 @@ class LoopConfig:
             usdc_per_position=_f("ORCHESTRATOR_USDC_PER_POSITION", cls.usdc_per_position),
             scan_limit=_i("ORCHESTRATOR_SCAN_LIMIT", cls.scan_limit),
             scan_min_liquidity_usd=_f("ORCHESTRATOR_MIN_LIQUIDITY_USD", cls.scan_min_liquidity_usd),
+            min_arb_edge_pp=_f("ORCHESTRATOR_MIN_ARB_EDGE_PP", cls.min_arb_edge_pp),
+            min_arb_score=_f("ORCHESTRATOR_MIN_ARB_SCORE", cls.min_arb_score),
+            reconciler_interval_s=_f("ORCHESTRATOR_RECONCILER_INTERVAL_S", cls.reconciler_interval_s),
+            reconciler_cooldown_s=_f("ORCHESTRATOR_RECONCILER_COOLDOWN_S", cls.reconciler_cooldown_s),
+            reconciler_min_close_spread_pp=_f(
+                "ORCHESTRATOR_RECONCILER_MIN_CLOSE_SPREAD_PP",
+                cls.reconciler_min_close_spread_pp,
+            ),
         )
 
 
@@ -158,6 +176,22 @@ class Orchestrator:
             usdc_per_position=cfg.usdc_per_position,
             scan_limit=cfg.scan_limit,
             scan_min_liquidity_usd=cfg.scan_min_liquidity_usd,
+            min_arb_edge_pp=cfg.min_arb_edge_pp,
+            min_arb_score=cfg.min_arb_score,
+        )
+
+        # Bucket 2: cross-venue reconciler. Tracks paper-hedge marks for
+        # arb-strategy positions and triggers /resolve when the spread
+        # captures or inverts. Always instantiated; no-op when no arb legs
+        # are open.
+        self.reconciler = Reconciler(
+            ReconcilerConfig(
+                interval_s=cfg.reconciler_interval_s,
+                cooldown_s=cfg.reconciler_cooldown_s,
+                min_close_spread_pp=cfg.reconciler_min_close_spread_pp,
+            ),
+            signal_client=self._signal,
+            execution_client=self._exec,
         )
 
         # Dedupe: (strategy, market_id) → position_id. Stops a strategy from
@@ -285,11 +319,44 @@ class Orchestrator:
                 except Exception as e:  # noqa: BLE001 — keep the daemon alive
                     log.exception("tick crashed: %s", e)
 
+                # Bucket 2: re-mark and (maybe) close arb paper-hedge legs.
+                # Reconciler enforces its own min-interval, so calling every
+                # loop tick is fine.
+                try:
+                    rec_summary = self.reconciler.tick()
+                    if rec_summary.get("closed"):
+                        log.info("reconciler closed %d arb legs",
+                                 len(rec_summary["closed"]))
+                except Exception as e:  # noqa: BLE001
+                    log.exception("reconciler tick crashed: %s", e)
+
                 elapsed = time.perf_counter() - t0
                 sleep_for = max(1.0, self.cfg.interval_s - elapsed)
                 time.sleep(sleep_for)
         finally:
             self.risk.stop_watchdog()
+
+    def _register_with_reconciler(self, signal: Signal, position_id: str) -> None:
+        """Hand an arb position to the reconciler so it can paper-hedge."""
+        if signal.strategy != "arb":
+            return
+        hedge = (signal.metadata or {}).get("hedge_leg") or {}
+        pair = (signal.metadata or {}).get("arb_pair") or {}
+        if not hedge.get("ticker"):
+            return
+        # Stash open-time Polymarket YES so the reconciler can compute the
+        # original spread without re-reading from the matcher.
+        hedge_payload = dict(hedge)
+        hedge_payload["open_poly_yes"] = pair.get("poly_yes_price")
+        try:
+            self.reconciler.record_open(
+                position_id=position_id,
+                poly_market_id=signal.market_id,
+                poly_token_id=signal.token_id,
+                hedge=hedge_payload,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("reconciler register failed for %s: %s", position_id, e)
 
     # ------------------- dispatch -------------------
 
@@ -324,6 +391,7 @@ class Orchestrator:
             self.allocator.record_open(signal.strategy, position_id, size)
             self.risk.record_open(position_id=position_id, strategy=signal.strategy,
                                   size=size, token_id=signal.token_id)
+            self._register_with_reconciler(signal, position_id)
             try:
                 strategy.on_open(signal, position_id, size)
             except Exception as e:  # noqa: BLE001
@@ -343,6 +411,7 @@ class Orchestrator:
         self.allocator.record_open(signal.strategy, position_id, size)
         self.risk.record_open(position_id=position_id, strategy=signal.strategy,
                               size=size, token_id=signal.token_id)
+        self._register_with_reconciler(signal, position_id)
         try:
             strategy.on_open(signal, position_id, size)
         except Exception as e:  # noqa: BLE001

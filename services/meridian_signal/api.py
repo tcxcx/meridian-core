@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from flask import Blueprint, Flask, jsonify, request
 from flask_cors import CORS
 
-from . import _dns_fallback, cryo, entropy, polymarket, seed, swarm, topology, zg_client
+from . import _dns_fallback, cryo, entropy, matcher, polymarket, seed, swarm, topology, zg_client
 
 _dns_fallback.install()
 
@@ -231,6 +231,30 @@ def topology_correlated_route():
         "token_id": token_id,
         "threshold": threshold,
         "correlated": topology.correlated_with(token_id, threshold=threshold),
+    })
+
+
+@signal_bp.get("/arb/pairs")
+def arb_pairs_route():
+    """Bucket 2 — discover Polymarket↔Kalshi pairs with implied YES-price gap.
+
+    Cheap to call repeatedly; the matcher caches in-process for ~30s.
+    """
+    poly_limit = int(request.args.get("poly_limit", 20))
+    poly_min_liq = float(request.args.get("poly_min_liquidity_usd", 5_000.0))
+    kalshi_limit = int(request.args.get("kalshi_limit", 50))
+    kalshi_min_vol = float(request.args.get("kalshi_min_volume_24h", 1_000.0))
+    min_score = float(request.args.get("min_score", matcher.DEFAULT_MIN_SCORE))
+    pairs = matcher.discover_pairs(
+        poly_limit=poly_limit,
+        poly_min_liquidity_usd=poly_min_liq,
+        kalshi_limit=kalshi_limit,
+        kalshi_min_volume_24h=kalshi_min_vol,
+        min_score=min_score,
+    )
+    return jsonify({
+        "count": len(pairs),
+        "pairs": [p.to_dict() for p in pairs],
     })
 
 
