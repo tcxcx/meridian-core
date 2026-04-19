@@ -42,6 +42,7 @@ from . import bridge_client as bridge_mod
 from . import burner as burner_mod
 from . import clob_client, encryptor, hook_client
 from . import keeperhub as keeperhub_mod
+from . import tenants as tenants_mod
 from .daily_pack import DailyPackBuilder
 from .encryptor import SealedInput
 from .store import PositionRecord, PositionStore
@@ -100,6 +101,7 @@ def create_app() -> Flask:
     bridge = bridge_mod.from_env()
     pinner = attestation_mod.from_env()  # Bucket 4: per-position 0G attestation
     daily_pack = DailyPackBuilder(store=store, audit=audit, attestation=pinner)  # Bucket 5
+    tenants = tenants_mod.from_env()  # Bucket 6: multi-tenant isolation
 
     def _audit(event: str, *, position_id: str | None = None, status: str = "ok", payload: dict | None = None) -> None:
         # Audit writes must never break the request flow — swallow + warn.
@@ -130,6 +132,7 @@ def create_app() -> Flask:
                 "bridge": type(bridge).__name__,
                 "audit": audit is not None,
                 "attestation": pinner is not None,
+                "tenants": tenants.ids(),
             },
             "chains": {
                 "settlement": settlement_chain,
@@ -147,6 +150,11 @@ def create_app() -> Flask:
         side = (body.get("side") or "BUY").upper()
         usdc_amount = body.get("usdc_amount")
         strategy = body.get("strategy") or "directional"
+        # Bucket 6: pick the requested tenant or fall back to "default" for
+        # forks running a single fund. Validate against the registry so a
+        # misconfigured caller can't open under an unknown tenant or trade a
+        # strategy the tenant hasn't whitelisted.
+        tenant_id = body.get("tenant_id") or tenants_mod.DEFAULT_TENANT_ID
         # Bucket 4: orchestrator may pre-encrypt the size at the boundary so
         # cleartext notional never crosses localhost. Shape matches Solidity
         # `InEuint128` (camelCase fields produced by cofhejs).
@@ -163,9 +171,30 @@ def create_app() -> Flask:
         if factory is None:
             return jsonify({"error": "BURNER_SEED not configured"}), 500
 
-        # Per-strategy sub-account (Bucket 4): same position_id under
-        # different strategies derives to different burners.
-        burner = factory.derive(position_id, strategy_id=strategy)
+        tenant_cfg = tenants.get(tenant_id)
+        if tenant_cfg is None:
+            return jsonify({
+                "error": f"unknown tenant_id: {tenant_id!r}",
+                "known_tenants": tenants.ids(),
+            }), 400
+        if not tenant_cfg.allows(strategy):
+            return jsonify({
+                "error": f"tenant {tenant_id!r} does not allow strategy {strategy!r}",
+                "allowed_strategies": sorted(tenant_cfg.strategies),
+            }), 403
+        if float(usdc_amount) > float(tenant_cfg.per_position_max_usdc):
+            return jsonify({
+                "error": (
+                    f"usdc_amount={usdc_amount} exceeds tenant {tenant_id!r} "
+                    f"per_position_max={tenant_cfg.per_position_max_usdc}"
+                ),
+            }), 422
+
+        # Per-tenant + per-strategy sub-account (Bucket 6): same
+        # position_id under different (tenant, strategy) tuples derives to
+        # different burners. The default tenant aliases the Bucket-4 layout
+        # so existing positions keep re-deriving to the same EOA.
+        burner = factory.derive(position_id, strategy_id=strategy, tenant_id=tenant_id)
         amount_uint128 = _to_uint128_amount(float(usdc_amount))
 
         record = PositionRecord(
@@ -176,6 +205,7 @@ def create_app() -> Flask:
             usdc_amount=float(usdc_amount),
             burner_address=burner.address,
             strategy=strategy,
+            tenant_id=tenant_id,
         )
         store.upsert(record)
         _audit("open.received", position_id=position_id, payload={
@@ -183,6 +213,7 @@ def create_app() -> Flask:
             "side": side, "usdc_amount": float(usdc_amount),
             "burner_address": burner.address,
             "strategy": strategy,
+            "tenant_id": tenant_id,
             "encrypted_size_provided": sealed_handle is not None,
         })
 
@@ -302,7 +333,7 @@ def create_app() -> Flask:
         #   1b) burner signs BurnIntent; Forwarder mints USDC to treasury on Arb Sepolia.
         treasury_address = hook.treasury_address
         burner_obj = (
-            factory.derive(position_id, strategy_id=record.strategy)
+            factory.derive(position_id, strategy_id=record.strategy, tenant_id=record.tenant_id)
             if factory is not None else None
         )
         if burner_obj is not None and float(payout_usdc) > 0:
@@ -411,6 +442,7 @@ def create_app() -> Flask:
                 "schema": "meridian/position/v1",
                 "position_id": position_id,
                 "strategy": record.strategy,
+                "tenant_id": record.tenant_id,
                 "market_id": record.market_id,
                 "token_id": record.token_id,
                 "side": record.side,
@@ -424,9 +456,14 @@ def create_app() -> Flask:
                 "ts": _time.time(),
             }
             try:
-                pin = pinner.pin(envelope, meta={"position_id": position_id, "strategy": record.strategy})
+                pin = pinner.pin(envelope, meta={
+                    "position_id": position_id,
+                    "strategy": record.strategy,
+                    "tenant_id": record.tenant_id,
+                })
                 _audit("attestation.pinned", position_id=position_id, payload={
                     "root_hash": pin.root_hash, "tx_hash": pin.tx_hash, "size_bytes": pin.size_bytes,
+                    "tenant_id": record.tenant_id,
                 })
             except Exception as e:  # noqa: BLE001
                 log.warning("attestation pin failed for %s: %s", position_id, e)
@@ -444,7 +481,40 @@ def create_app() -> Flask:
 
     @bp.get("/positions")
     def list_positions():
+        # Bucket 6: optional tenant filter via query param. Unknown tenants
+        # 404 so callers can distinguish "tenant has no positions" from
+        # "tenant doesn't exist".
+        tenant_filter = request.args.get("tenant_id")
+        if tenant_filter is not None:
+            if tenant_filter not in tenants:
+                return jsonify({
+                    "error": f"unknown tenant_id: {tenant_filter!r}",
+                    "known_tenants": tenants.ids(),
+                }), 404
+            return jsonify({
+                "tenant_id": tenant_filter,
+                "positions": [
+                    r.to_json() for r in store.list()
+                    if getattr(r, "tenant_id", "default") == tenant_filter
+                ],
+            })
         return jsonify({"positions": [r.to_json() for r in store.list()]})
+
+    @bp.get("/tenants")
+    def list_tenants():
+        # Bucket 6: snapshot of configured tenants + per-tenant open count
+        # so the dashboard / verifier can render a tenant picker without a
+        # second round-trip.
+        open_by_tenant: dict[str, int] = {}
+        for r in store.list():
+            tid = getattr(r, "tenant_id", "default")
+            open_by_tenant[tid] = open_by_tenant.get(tid, 0) + 1
+        return jsonify({
+            "tenants": [
+                {**cfg.to_json(), "open_positions": open_by_tenant.get(cfg.tenant_id, 0)}
+                for cfg in tenants.list()
+            ],
+        })
 
     @bp.get("/positions/stream")
     def positions_stream():
@@ -553,15 +623,31 @@ def create_app() -> Flask:
     # the pack JSON and renders the proof table (per-position root_hashes,
     # chain explorer links, aggregate PnL).
 
+    def _resolve_tenant_filter() -> tuple[str | None, tuple | None]:
+        """Read ?tenant_id=… and validate. Returns (tenant_id, error_response)."""
+        raw = request.args.get("tenant_id")
+        if raw is None:
+            return None, None
+        if raw not in tenants:
+            return None, (jsonify({
+                "error": f"unknown tenant_id: {raw!r}",
+                "known_tenants": tenants.ids(),
+            }), 404)
+        return raw, None
+
     @bp.post("/daily-pack/<date>/build")
     def daily_pack_build(date: str):
+        tenant_filter, err = _resolve_tenant_filter()
+        if err is not None:
+            return err
         try:
-            result = daily_pack.build_and_pin(date)
+            result = daily_pack.build_and_pin(date, tenant_id=tenant_filter)
         except ValueError as e:
             return jsonify({"error": f"bad date: {e}"}), 400
         except Exception as e:  # noqa: BLE001
             log.warning("daily_pack build %s failed: %s", date, e)
             return jsonify({"error": str(e)}), 500
+        envelope_tenant = result.pack.get("tenant_id") or "default"
         pinned_payload: dict | None = None
         if result.pinned is not None:
             pinned_payload = {
@@ -571,6 +657,7 @@ def create_app() -> Flask:
             }
             _audit("daily_pack.pinned", payload={
                 "date": date,
+                "tenant_id": envelope_tenant,
                 "root_hash": result.pinned.root_hash,
                 "tx_hash": result.pinned.tx_hash,
                 "size_bytes": result.pinned.size_bytes,
@@ -579,6 +666,7 @@ def create_app() -> Flask:
         else:
             _audit("daily_pack.built", status="info", payload={
                 "date": date,
+                "tenant_id": envelope_tenant,
                 "n_positions": result.pack["aggregate"]["n_positions"],
                 "pinned": False,
             })
@@ -594,10 +682,16 @@ def create_app() -> Flask:
             _ = (datetime.strptime(date, "%Y-%m-%d"))  # noqa: F841
         except ValueError:
             return jsonify({"error": "date must be YYYY-MM-DD"}), 400
-        cached = daily_pack.load_local(date)
+        tenant_filter, err = _resolve_tenant_filter()
+        if err is not None:
+            return err
+        cached = daily_pack.load_local(date, tenant_id=tenant_filter)
         if cached is None:
-            return jsonify({"error": f"no pack for {date}; POST /daily-pack/{date}/build first"}), 404
-        pinned = daily_pack.latest_pin_for(date)
+            hint = f"POST /daily-pack/{date}/build"
+            if tenant_filter is not None:
+                hint += f"?tenant_id={tenant_filter}"
+            return jsonify({"error": f"no pack for {date}; {hint} first"}), 404
+        pinned = daily_pack.latest_pin_for(date, tenant_id=tenant_filter)
         return jsonify({
             "pack": cached,
             "pinned": pinned,
@@ -617,6 +711,11 @@ def create_app() -> Flask:
 
     @app.get("/verifier/<date>")
     def verifier_date(date: str):  # noqa: ARG001 — date is read by JS from URL
+        return send_from_directory(str(static_dir), "verifier.html")
+
+    @app.get("/verifier/<tenant>/<date>")
+    def verifier_tenant_date(tenant: str, date: str):  # noqa: ARG001
+        # Tenant-scoped verifier URL — JS reads both segments from window.location.
         return send_from_directory(str(static_dir), "verifier.html")
 
     app.register_blueprint(bp)

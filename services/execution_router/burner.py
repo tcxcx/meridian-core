@@ -1,18 +1,25 @@
 """Deterministic burner-wallet derivation.
 
 Each Polymarket position gets a fresh EOA derived from
-    keccak(BURNER_SEED || strategyId || positionId)
+    keccak(BURNER_SEED || tenantId || strategyId || positionId)
 so that:
-  * the same (strategyId, positionId) always derives the same burner
+  * the same (tenantId, strategyId, positionId) always derives the same burner
     (idempotent recovery after a process restart, no extra secrets storage),
   * positions are unlinkable on-chain because the seed lives only on the
-    treasury host, and
+    treasury host,
   * different strategies running on the same market produce different burner
-    addresses (per-strategy sub-accounts — Bucket 4).
+    addresses (per-strategy sub-accounts — Bucket 4), and
+  * different tenants on the same fork produce different burner addresses
+    even with identical (strategy, positionId) — the multi-tenant isolation
+    guarantee from Bucket 6.
 
-Backwards-compat: when `strategy_id` is omitted, falls back to the original
-`keccak(seed || positionId)` digest so pre-Bucket-4 positions still
-re-derive to the same burner on hydration.
+Backwards-compat is layered:
+  * `(strategy=None, tenant=None)`     → keccak(seed || positionId)             (pre-Bucket-4)
+  * `(strategy=X,    tenant=None)`     → keccak(seed || X || positionId)        (Bucket 4)
+  * `(strategy=X,    tenant="default")`→ keccak(seed || X || positionId)        (Bucket 6 — `default` aliases Bucket 4 so existing rows re-derive)
+  * `(strategy=X,    tenant=Y!=default)`→ keccak(seed || Y || X || positionId)  (Bucket 6)
+
+so hydrated positions from earlier phases re-derive identically.
 """
 from __future__ import annotations
 
@@ -44,9 +51,26 @@ class BurnerFactory:
             raise ValueError("BURNER_SEED must be a 32-byte hex string")
         self._seed = bytes.fromhex(seed)
 
-    def derive(self, position_id: str, strategy_id: str | None = None) -> Burner:
+    def derive(
+        self,
+        position_id: str,
+        strategy_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> Burner:
         position_bytes = position_id.encode("utf-8")
-        if strategy_id:
+        # `default` tenant aliases the Bucket-4 layout so existing positions
+        # under the implicit "default" tenant re-derive to the same burner.
+        effective_tenant = (
+            tenant_id if tenant_id and tenant_id != "default" else None
+        )
+        if effective_tenant and strategy_id:
+            digest = sha3_256(
+                self._seed
+                + effective_tenant.encode("utf-8")
+                + strategy_id.encode("utf-8")
+                + position_bytes
+            ).digest()
+        elif strategy_id:
             digest = sha3_256(self._seed + strategy_id.encode("utf-8") + position_bytes).digest()
         else:
             # Pre-Bucket-4 layout — kept so hydrated positions re-derive identically.

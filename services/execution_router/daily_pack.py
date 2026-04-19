@@ -61,6 +61,7 @@ def _position_entry(rec: PositionRecord, root_hash: str | None) -> dict[str, Any
     return {
         "position_id": rec.position_id,
         "strategy": rec.strategy,
+        "tenant_id": getattr(rec, "tenant_id", "default"),
         "market_id": rec.market_id,
         "token_id": rec.token_id,
         "side": rec.side,
@@ -137,8 +138,13 @@ class DailyPackBuilder:
 
     # ----- public API -----
 
-    def build(self, date: str | None = None) -> dict[str, Any]:
-        """Compute the pack envelope for the given UTC date (default: today)."""
+    def build(self, date: str | None = None, *, tenant_id: str | None = None) -> dict[str, Any]:
+        """Compute the pack envelope for the given UTC date (default: today).
+
+        When `tenant_id` is provided the pack only includes positions whose
+        `record.tenant_id` matches; the tenant id is stamped onto the envelope
+        so verifier consumers know which slice they're looking at.
+        """
         date = date or _today_utc()
         start_ts, end_ts = _date_window_utc(date)
         rh_by_pid = self._index_pins_in_window(start_ts, end_ts)
@@ -149,6 +155,8 @@ class DailyPackBuilder:
                 continue
             if not (start_ts <= rec.updated_at < end_ts):
                 continue
+            if tenant_id is not None and getattr(rec, "tenant_id", "default") != tenant_id:
+                continue
             entries.append(_position_entry(rec, rh_by_pid.get(rec.position_id)))
 
         entries.sort(key=lambda e: (e["updated_at"], e["position_id"]))
@@ -156,15 +164,23 @@ class DailyPackBuilder:
         return {
             "schema": SCHEMA,
             "date": date,
+            "tenant_id": tenant_id or "default",
             "generated_at": time.time(),
             "positions": entries,
             "aggregate": _aggregate(entries),
         }
 
     def write_local(self, pack: dict[str, Any]) -> Path:
-        """Persist the pack JSON to `var/daily_packs/<date>.json`."""
+        """Persist pack JSON to `var/daily_packs/[<tenant_id>/]<date>.json`.
+
+        The default tenant writes to the legacy `var/daily_packs/<date>.json`
+        path so prior cached packs from before Bucket 6 still hydrate.
+        """
         date = pack["date"]
-        path = self._pack_dir / f"{date}.json"
+        tenant_id = pack.get("tenant_id") or "default"
+        directory = self._pack_dir if tenant_id == "default" else self._pack_dir / tenant_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{date}.json"
         body = self._serialise(pack)
         with self._lock:
             tmp = path.with_suffix(".json.tmp")
@@ -172,14 +188,16 @@ class DailyPackBuilder:
             tmp.replace(path)
         return path
 
-    def load_local(self, date: str) -> dict[str, Any] | None:
-        path = self._pack_dir / f"{date}.json"
+    def load_local(self, date: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
+        tid = tenant_id or "default"
+        directory = self._pack_dir if tid == "default" else self._pack_dir / tid
+        path = directory / f"{date}.json"
         if not path.exists():
             return None
         try:
             return json.loads(path.read_bytes())
         except (json.JSONDecodeError, OSError) as e:
-            log.warning("daily pack %s unreadable: %s", date, e)
+            log.warning("daily pack %s/%s unreadable: %s", tid, date, e)
             return None
 
     def pin(self, pack: dict[str, Any]) -> PinResult | None:
@@ -189,13 +207,14 @@ class DailyPackBuilder:
         meta = {
             "kind": "daily_pack",
             "date": pack["date"],
+            "tenant_id": pack.get("tenant_id") or "default",
             "n_positions": pack["aggregate"]["n_positions"],
         }
         return self._attestation.pin(pack, meta=meta)
 
-    def build_and_pin(self, date: str | None = None) -> BuildResult:
+    def build_and_pin(self, date: str | None = None, *, tenant_id: str | None = None) -> BuildResult:
         """Build + write local + pin (best-effort) + return the result."""
-        pack = self.build(date)
+        pack = self.build(date, tenant_id=tenant_id)
         path = self.write_local(pack)
         pinned: PinResult | None = None
         try:
@@ -204,24 +223,34 @@ class DailyPackBuilder:
             log.warning("daily pack %s pin failed: %s", pack["date"], e)
         return BuildResult(pack=pack, written_path=path, pinned=pinned)
 
-    def latest_pin_for(self, date: str) -> dict[str, Any] | None:
-        """Look up the most recent `daily_pack.pinned` audit event for date."""
+    def latest_pin_for(self, date: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
+        """Look up the most recent `daily_pack.pinned` audit event for date.
+
+        When `tenant_id` is provided, only matches events whose payload
+        carries the same tenant id (or defaults to "default" for older
+        events emitted before the field was introduced).
+        """
         try:
             events = self._audit.recent(limit=self._audit_scan_limit)
         except Exception as e:  # noqa: BLE001
             log.warning("audit.recent failed: %s", e)
             return None
+        target_tid = tenant_id or "default"
         for e in events:
             if e.get("event") != "daily_pack.pinned":
                 continue
             payload = e.get("payload") or {}
-            if payload.get("date") == date:
-                return {
-                    "root_hash": payload.get("root_hash"),
-                    "tx_hash": payload.get("tx_hash"),
-                    "size_bytes": payload.get("size_bytes"),
-                    "ts": e.get("ts"),
-                }
+            if payload.get("date") != date:
+                continue
+            if tenant_id is not None and (payload.get("tenant_id") or "default") != target_tid:
+                continue
+            return {
+                "root_hash": payload.get("root_hash"),
+                "tx_hash": payload.get("tx_hash"),
+                "size_bytes": payload.get("size_bytes"),
+                "tenant_id": payload.get("tenant_id") or "default",
+                "ts": e.get("ts"),
+            }
         return None
 
     # ----- internals -----

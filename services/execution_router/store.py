@@ -36,6 +36,11 @@ class PositionRecord:
     # Strategy-plugin id (Bucket 4). Defaults to "directional" so older rows
     # hydrate cleanly without a schema migration (single JSON column).
     strategy: str = "directional"
+    # Tenant id (Bucket 6). Defaults to "default" so pre-Bucket-6 rows hydrate
+    # under the implicit single-tenant fork. The burner-derivation path
+    # treats `tenant_id == "default"` as the Bucket-4 layout (no tenant
+    # bytes in the keccak preimage) — see `burner.BurnerFactory.derive`.
+    tenant_id: str = "default"
     status: PositionStatus = "funding"
     fund_tx: str | None = None
     clob_order_id: str | None = None
@@ -71,6 +76,7 @@ class PositionRecord:
             "usdc_amount": self.usdc_amount,
             "burner_address": self.burner_address,
             "strategy": self.strategy,
+            "tenant_id": self.tenant_id,
             "status": self.status,
             "fund_tx": self.fund_tx,
             "clob_order_id": self.clob_order_id,
