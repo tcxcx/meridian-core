@@ -1,12 +1,18 @@
 """Deterministic burner-wallet derivation.
 
 Each Polymarket position gets a fresh EOA derived from
-    keccak(BURNER_SEED || positionId)
+    keccak(BURNER_SEED || strategyId || positionId)
 so that:
-  * the same positionId always derives the same burner (idempotent recovery
-    after a process restart, no extra secrets storage required), and
+  * the same (strategyId, positionId) always derives the same burner
+    (idempotent recovery after a process restart, no extra secrets storage),
   * positions are unlinkable on-chain because the seed lives only on the
-    treasury host.
+    treasury host, and
+  * different strategies running on the same market produce different burner
+    addresses (per-strategy sub-accounts — Bucket 4).
+
+Backwards-compat: when `strategy_id` is omitted, falls back to the original
+`keccak(seed || positionId)` digest so pre-Bucket-4 positions still
+re-derive to the same burner on hydration.
 """
 from __future__ import annotations
 
@@ -38,9 +44,13 @@ class BurnerFactory:
             raise ValueError("BURNER_SEED must be a 32-byte hex string")
         self._seed = bytes.fromhex(seed)
 
-    def derive(self, position_id: str) -> Burner:
+    def derive(self, position_id: str, strategy_id: str | None = None) -> Burner:
         position_bytes = position_id.encode("utf-8")
-        digest = sha3_256(self._seed + position_bytes).digest()
+        if strategy_id:
+            digest = sha3_256(self._seed + strategy_id.encode("utf-8") + position_bytes).digest()
+        else:
+            # Pre-Bucket-4 layout — kept so hydrated positions re-derive identically.
+            digest = sha3_256(self._seed + position_bytes).digest()
         acct = Account.from_key(digest)
         return Burner(
             address=acct.address,

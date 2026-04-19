@@ -141,6 +141,17 @@ class HookClient:
         pid = _position_id_to_bytes32(position_id)
         return self._submit("fundBurner", [burner, pid, sealed])
 
+    def fund_burner_with_sealed(self, position_id: str, burner_address: str, sealed: SealedInput) -> HookTxResult:
+        """Skip re-encryption — caller already has an `InEuint128`.
+
+        Used by Bucket 4: orchestrator pre-encrypts the size so the cleartext
+        notional never crosses localhost from orchestrator → execution-router.
+        Field order in `sealed` MUST match the on-chain InEuint128 struct.
+        """
+        burner = Web3.to_checksum_address(burner_address)
+        pid = _position_id_to_bytes32(position_id)
+        return self._submit("fundBurner", [burner, pid, sealed])
+
     def mark_resolved(self, position_id: str, payout_uint128: int) -> HookTxResult:
         sender = self.treasury_address or self._hook_address
         sealed = self._encryptor.encrypt_uint128(payout_uint128, sender=sender)

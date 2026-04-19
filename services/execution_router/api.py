@@ -33,11 +33,15 @@ from dotenv import load_dotenv
 from flask import Blueprint, Flask, Response, jsonify, request, send_from_directory, stream_with_context
 from flask_cors import CORS
 
+import time as _time
+
+from . import attestation as attestation_mod
 from . import audit as audit_mod
 from . import bridge_client as bridge_mod
 from . import burner as burner_mod
 from . import clob_client, encryptor, hook_client
 from . import keeperhub as keeperhub_mod
+from .encryptor import SealedInput
 from .store import PositionRecord, PositionStore
 
 log = logging.getLogger("meridian.execution.api")
@@ -45,6 +49,30 @@ log = logging.getLogger("meridian.execution.api")
 
 def _to_uint128_amount(usdc_amount: float, decimals: int = 6) -> int:
     return int(round(usdc_amount * (10**decimals)))
+
+
+def _sealed_from_payload(handle: dict) -> SealedInput:
+    """Parse the orchestrator-side `encrypted_size_handle` (Bucket 4).
+
+    cofhejs emits camelCase JSON; the on-chain struct field order is
+    (uint256 ctHash, uint8 securityZone, uint8 utype, bytes signature). We
+    convert to the Python `SealedInput` so HookClient's existing ABI
+    encoder picks it up unchanged.
+    """
+    ct_raw = handle["ctHash"]
+    if isinstance(ct_raw, str):
+        ct = int(ct_raw, 0)  # honours 0x-prefix or decimal string
+    else:
+        ct = int(ct_raw)
+    sig_hex = handle.get("signature") or ""
+    if sig_hex.startswith("0x"):
+        sig_hex = sig_hex[2:]
+    return SealedInput(
+        ct_hash=ct,
+        security_zone=int(handle.get("securityZone", 0)),
+        utype=int(handle.get("utype", 8)),
+        signature=bytes.fromhex(sig_hex) if sig_hex else b"",
+    )
 
 
 def create_app() -> Flask:
@@ -68,6 +96,7 @@ def create_app() -> Flask:
     keeperhub = keeperhub_mod.from_env()
     hook = hook_client.from_env(encryptor=enc, keeperhub=keeperhub)
     bridge = bridge_mod.from_env()
+    pinner = attestation_mod.from_env()  # Bucket 4: per-position 0G attestation
 
     def _audit(event: str, *, position_id: str | None = None, status: str = "ok", payload: dict | None = None) -> None:
         # Audit writes must never break the request flow — swallow + warn.
@@ -97,6 +126,7 @@ def create_app() -> Flask:
                 "treasury": hook.treasury_address if hook else None,
                 "bridge": type(bridge).__name__,
                 "audit": audit is not None,
+                "attestation": pinner is not None,
             },
             "chains": {
                 "settlement": settlement_chain,
@@ -113,6 +143,11 @@ def create_app() -> Flask:
         token_id = body.get("token_id")
         side = (body.get("side") or "BUY").upper()
         usdc_amount = body.get("usdc_amount")
+        strategy = body.get("strategy") or "directional"
+        # Bucket 4: orchestrator may pre-encrypt the size at the boundary so
+        # cleartext notional never crosses localhost. Shape matches Solidity
+        # `InEuint128` (camelCase fields produced by cofhejs).
+        sealed_handle = body.get("encrypted_size_handle")
 
         missing = [k for k, v in {
             "position_id": position_id,
@@ -125,7 +160,9 @@ def create_app() -> Flask:
         if factory is None:
             return jsonify({"error": "BURNER_SEED not configured"}), 500
 
-        burner = factory.derive(position_id)
+        # Per-strategy sub-account (Bucket 4): same position_id under
+        # different strategies derives to different burners.
+        burner = factory.derive(position_id, strategy_id=strategy)
         amount_uint128 = _to_uint128_amount(float(usdc_amount))
 
         record = PositionRecord(
@@ -135,18 +172,25 @@ def create_app() -> Flask:
             side="BUY" if side == "BUY" else "SELL",
             usdc_amount=float(usdc_amount),
             burner_address=burner.address,
+            strategy=strategy,
         )
         store.upsert(record)
         _audit("open.received", position_id=position_id, payload={
             "market_id": market_id, "token_id": token_id,
             "side": side, "usdc_amount": float(usdc_amount),
             "burner_address": burner.address,
+            "strategy": strategy,
+            "encrypted_size_provided": sealed_handle is not None,
         })
 
         # Step 1 — fund the burner with encrypted fhUSDC via the hook (Arb Sepolia).
         if hook is not None:
             try:
-                fund_result = hook.fund_burner(position_id, burner.address, amount_uint128)
+                if sealed_handle is not None:
+                    sealed = _sealed_from_payload(sealed_handle)
+                    fund_result = hook.fund_burner_with_sealed(position_id, burner.address, sealed)
+                else:
+                    fund_result = hook.fund_burner(position_id, burner.address, amount_uint128)
                 record.fund_tx = fund_result.tx_hash
                 if fund_result.execution_id:
                     record.keeperhub_executions.append(fund_result.execution_id)
@@ -254,7 +298,10 @@ def create_app() -> Flask:
         #   1a) approve + deposit payout into Polygon Amoy GatewayWallet,
         #   1b) burner signs BurnIntent; Forwarder mints USDC to treasury on Arb Sepolia.
         treasury_address = hook.treasury_address
-        burner_obj = factory.derive(position_id) if factory is not None else None
+        burner_obj = (
+            factory.derive(position_id, strategy_id=record.strategy)
+            if factory is not None else None
+        )
         if burner_obj is not None and float(payout_usdc) > 0:
             try:
                 dep_result = bridge.deposit(
@@ -352,6 +399,37 @@ def create_app() -> Flask:
             "resolve_tx": record.resolve_tx, "settle_tx": record.settle_tx,
             "payout_usdc": record.payout_usdc,
         })
+
+        # Bucket 4: pin a per-position attestation envelope to 0G Storage.
+        # Bucket 5 will fold these root_hashes into the daily attestation pack.
+        # Best-effort — failure logs + audits but does not fail /resolve.
+        if pinner is not None:
+            envelope = {
+                "schema": "meridian/position/v1",
+                "position_id": position_id,
+                "strategy": record.strategy,
+                "market_id": record.market_id,
+                "token_id": record.token_id,
+                "side": record.side,
+                "burner_address": record.burner_address,
+                "fund_tx": record.fund_tx,
+                "resolve_tx": record.resolve_tx,
+                "settle_tx": record.settle_tx,
+                "bridge_send_burn_tx": record.bridge_send_burn_tx,
+                "bridge_recv_burn_tx": record.bridge_recv_burn_tx,
+                "payout_uint128": _to_uint128_amount(float(record.payout_usdc or 0)),
+                "ts": _time.time(),
+            }
+            try:
+                pin = pinner.pin(envelope, meta={"position_id": position_id, "strategy": record.strategy})
+                _audit("attestation.pinned", position_id=position_id, payload={
+                    "root_hash": pin.root_hash, "tx_hash": pin.tx_hash, "size_bytes": pin.size_bytes,
+                })
+            except Exception as e:  # noqa: BLE001
+                log.warning("attestation pin failed for %s: %s", position_id, e)
+                _audit("attestation.pin_failed", position_id=position_id, status="warn",
+                       payload={"error": str(e)})
+
         return jsonify({"position": record.to_json()})
 
     @bp.get("/positions/<position_id>")

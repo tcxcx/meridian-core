@@ -29,6 +29,7 @@ from typing import Any
 import httpx
 
 from .allocator import Allocator, AllocatorConfig
+from .encryptor import EncryptedSize, from_env as encryptor_from_env
 from .risk import RiskConfig, RiskEngine
 from .strategies import Signal, Strategy, load_strategies
 
@@ -140,6 +141,13 @@ class Orchestrator:
             state_dir=state_dir,
             total_capital=cfg.total_capital,
         ))
+
+        # Bucket 4: pre-encrypt position size at the orchestrator boundary so
+        # cleartext USDC notional never crosses localhost to the router. Falls
+        # back to a no-op encryptor when ORCHESTRATOR_ENCRYPT_SIZES=false or
+        # cogito is unreachable; the router's own CogitoEncryptor still gates
+        # those legacy paths.
+        self.encryptor = encryptor_from_env()
 
         # Load strategies. Each strategy gets the deps it accepts.
         self.strategies: list[Strategy] = load_strategies(
@@ -293,11 +301,21 @@ class Orchestrator:
             "token_id": signal.token_id,
             "side": signal.side,
             "usdc_amount": float(size),
-            # Sent for forward-compat; today's execution-router ignores
-            # unknown fields. Bucket 6 will persist it as a column.
             "strategy": signal.strategy,
             "venue": signal.venue,
         }
+
+        # Bucket 4: pre-encrypt notional. The handle (matching Solidity
+        # InEuint128) flows through the router unchanged into the hook so
+        # the cleartext size is never observable on the localhost wire.
+        try:
+            sealed = self.encryptor.encrypt(size)
+        except Exception as e:  # noqa: BLE001
+            log.warning("size encryption failed for %s, falling back to cleartext: %s",
+                        signal.market_id, e)
+            sealed = None
+        if isinstance(sealed, EncryptedSize):
+            payload["encrypted_size_handle"] = sealed.to_payload()
 
         if self.cfg.dry_run:
             log.info("[dry_run] would open strat=%s pos=%s market=%s edge=%.2fpp size=%s",

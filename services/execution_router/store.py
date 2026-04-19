@@ -33,6 +33,9 @@ class PositionRecord:
     side: Literal["BUY", "SELL"]
     usdc_amount: float
     burner_address: str
+    # Strategy-plugin id (Bucket 4). Defaults to "directional" so older rows
+    # hydrate cleanly without a schema migration (single JSON column).
+    strategy: str = "directional"
     status: PositionStatus = "funding"
     fund_tx: str | None = None
     clob_order_id: str | None = None
@@ -67,6 +70,7 @@ class PositionRecord:
             "side": self.side,
             "usdc_amount": self.usdc_amount,
             "burner_address": self.burner_address,
+            "strategy": self.strategy,
             "status": self.status,
             "fund_tx": self.fund_tx,
             "clob_order_id": self.clob_order_id,
