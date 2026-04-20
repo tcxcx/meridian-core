@@ -21,7 +21,7 @@ ENV_FILE   := $(ROOT)/.env
         cogito signal execution orchestrator-once orchestrator-loop orchestrator-dry \
         demo stop status \
         contracts-test typecheck \
-        smoke-keeperhub \
+        smoke-keeperhub preflight e2e-real \
         clean
 
 help:
@@ -36,6 +36,8 @@ help:
 	@echo "  orchestrator-dry   daemon orchestrator loop (no /open calls)"
 	@echo "  contracts-test     forge test --via-ir"
 	@echo "  typecheck          tsc --noEmit (cogito only)"
+	@echo "  preflight          check which demo tier (T0-T6) the current .env unlocks"
+	@echo "  e2e-real           preflight (require T4) → fire one real /open with \$$1 USDC"
 	@echo "  stop               kill anything started by 'make demo'"
 	@echo "  status             print pids + ports"
 	@echo "  clean              remove .run/ .log/ caches"
@@ -138,6 +140,42 @@ typecheck:
 # Writes proof tx hash to docs/proof/keeperhub.md.
 smoke-keeperhub:
 	cd services && uv run --env-file $(ENV_FILE) python -m execution_router.scripts.smoke_keeperhub
+
+# ── readiness preflight ───────────────────────────────────────────────────────
+#
+# Probes every env var, every sidecar, every RPC, prints a green/red matrix
+# grouped by tier (T0 dry-run → T6 full FHE). Exits 0 if everything green.
+#
+# Usage:
+#   make preflight                 # report only
+#   TIER=T3 make preflight         # exit 1 if any tier ≤ T3 incomplete
+preflight:
+	@if [ ! -f $(ENV_FILE) ]; then echo "ERROR: $(ENV_FILE) missing — copy .env.demo to .env first"; exit 1; fi
+	cd services && uv run --env-file $(ENV_FILE) python -m execution_router.scripts.preflight \
+	  $(if $(TIER),--target $(TIER),)
+
+# ── one real e2e position ─────────────────────────────────────────────────────
+#
+# Requires T4 (preflight passes through Real Circle Gateway bridge), then fires
+# a single $1 USDC position through the live state machine: signal → swarm →
+# fundBurner → bridge → CLOB → audit. Survives partial failure: any exception
+# is logged but the audit log + dashboard show exactly where it stopped.
+#
+# Sidecars must already be running. Start them with `make demo` first.
+e2e-real:
+	@if [ ! -f $(ENV_FILE) ]; then echo "ERROR: $(ENV_FILE) missing"; exit 1; fi
+	@echo "▶ preflight (require T4 ready) …"
+	@cd services && uv run --env-file $(ENV_FILE) python -m execution_router.scripts.preflight --target T4 \
+	  || (echo "✗ aborting e2e-real — fix the gaps above and re-run" && exit 1)
+	@echo
+	@echo "▶ firing one real /open with \$$1 USDC via orchestrator …"
+	@cd services && ORCHESTRATOR_USDC_PER_POSITION=1.0 ORCHESTRATOR_MAX_POSITIONS=1 \
+	  uv run --env-file $(ENV_FILE) python -m orchestrator once
+	@echo
+	@echo "✔ e2e-real complete. Inspect:"
+	@echo "  Dashboard:  http://127.0.0.1:5004/"
+	@echo "  Positions:  curl -s http://127.0.0.1:5004/api/execution/positions | jq ."
+	@echo "  Audit log:  curl -s 'http://127.0.0.1:5004/api/execution/audit?limit=20' | jq ."
 
 # ── housekeeping ──────────────────────────────────────────────────────────────
 
