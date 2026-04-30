@@ -8,6 +8,10 @@
           <span class="icon-refresh" :class="{ 'spinning': loading }">↻</span>
           <span class="btn-text">Refresh</span>
         </button>
+        <button class="tool-btn" :class="{ active: rectSelectMode }" @click="toggleRectSelect" title="Toggle rectangular selection">
+          <span class="icon-maximize">▭</span>
+          <span class="btn-text">Rect Select</span>
+        </button>
         <button class="tool-btn" @click="$emit('toggle-maximize')" :title="$t('graph.toggleMaximize')">
           <span class="icon-maximize">⛶</span>
         </button>
@@ -51,15 +55,55 @@
         <!-- 节点/边详情面板 -->
         <div v-if="selectedItem" class="detail-panel">
           <div class="detail-panel-header">
-            <span class="detail-title">{{ selectedItem.type === 'node' ? $t('graph.nodeDetails') : $t('graph.relationship') }}</span>
+            <span class="detail-title">{{ selectedItem.type === 'node' ? $t('graph.nodeDetails') : selectedItem.type === 'selection' ? 'Selection' : $t('graph.relationship') }}</span>
             <span v-if="selectedItem.type === 'node'" class="detail-type-badge" :style="{ background: selectedItem.color, color: '#fff' }">
               {{ selectedItem.entityType }}
             </span>
             <button class="detail-close" @click="closeDetailPanel">×</button>
           </div>
           
+          <!-- 多选详情 -->
+          <div v-if="selectedItem.type === 'selection'" class="detail-content">
+            <div class="detail-row">
+              <span class="detail-label">Nodes:</span>
+              <span class="detail-value">{{ selectedItem.data.nodeCount }}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Edges:</span>
+              <span class="detail-value">{{ selectedItem.data.edgeCount }}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Components:</span>
+              <span class="detail-value">{{ selectedItem.data.componentCount }}</span>
+            </div>
+
+            <div class="detail-section" v-if="selectedItem.data.types?.length">
+              <div class="section-title">Entity Types:</div>
+              <div class="labels-list">
+                <span v-for="type in selectedItem.data.types" :key="type.name" class="label-tag">
+                  {{ type.name }} · {{ type.count }}
+                </span>
+              </div>
+            </div>
+
+            <div class="detail-section" v-if="selectedItem.data.components?.length">
+              <div class="section-title">Connected Components:</div>
+              <div class="component-list">
+                <div v-for="(component, idx) in selectedItem.data.components" :key="idx" class="component-item">
+                  <div class="component-head">
+                    <span class="component-name">Component {{ idx + 1 }}</span>
+                    <span class="component-meta">{{ component.nodeCount }} nodes · {{ component.edgeCount }} edges</span>
+                  </div>
+                  <div class="component-nodes">
+                    <span v-for="node in component.nodes" :key="node.id" class="component-node">{{ node.name }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- 节点详情 -->
-          <div v-if="selectedItem.type === 'node'" class="detail-content">
+          <div v-else-if="selectedItem.type === 'node'" class="detail-content">
             <div class="detail-row">
               <span class="detail-label">Name:</span>
               <span class="detail-value">{{ selectedItem.data.name }}</span>
@@ -255,6 +299,7 @@ const showEdgeLabels = ref(true) // 默认显示边标签
 const expandedSelfLoops = ref(new Set()) // 展开的自环项
 const showSimulationFinishedHint = ref(false) // 模拟结束后的提示
 const wasSimulating = ref(false) // 追踪之前是否在模拟中
+const rectSelectMode = ref(false)
 
 // 关闭模拟结束提示
 const dismissFinishedHint = () => {
@@ -317,13 +362,96 @@ const formatDateTime = (dateStr) => {
 }
 
 const closeDetailPanel = () => {
-  selectedItem.value = null
-  expandedSelfLoops.value = new Set() // 重置展开状态
+  clearGraphSelection()
 }
 
 let currentSimulation = null
 let linkLabelsRef = null
 let linkLabelBgRef = null
+let nodeRef = null
+let linkRef = null
+let currentTransform = d3.zoomIdentity
+
+const clearGraphSelection = () => {
+  selectedItem.value = null
+  expandedSelfLoops.value = new Set()
+
+  if (nodeRef) {
+    nodeRef.attr('stroke', '#fff').attr('stroke-width', 2.5)
+  }
+  if (linkRef) {
+    linkRef.attr('stroke', '#C0C0C0').attr('stroke-width', 1.5)
+  }
+  if (linkLabelBgRef) {
+    linkLabelBgRef.attr('fill', 'rgba(255,255,255,0.95)')
+  }
+  if (linkLabelsRef) {
+    linkLabelsRef.attr('fill', '#666')
+  }
+}
+
+const toggleRectSelect = () => {
+  rectSelectMode.value = !rectSelectMode.value
+  clearGraphSelection()
+}
+
+const buildSelectionSummary = (selectedNodes, selectedEdges) => {
+  const typeMap = new Map()
+  selectedNodes.forEach((node) => {
+    typeMap.set(node.type, (typeMap.get(node.type) || 0) + 1)
+  })
+
+  const adjacency = new Map(selectedNodes.map((node) => [node.id, new Set()]))
+  selectedEdges.forEach((edge) => {
+    if (!adjacency.has(edge.source.id) || !adjacency.has(edge.target.id)) return
+    adjacency.get(edge.source.id).add(edge.target.id)
+    adjacency.get(edge.target.id).add(edge.source.id)
+  })
+
+  const nodeById = new Map(selectedNodes.map((node) => [node.id, node]))
+  const visited = new Set()
+  const components = []
+
+  selectedNodes.forEach((node) => {
+    if (visited.has(node.id)) return
+
+    const queue = [node.id]
+    const componentNodeIds = []
+    visited.add(node.id)
+
+    while (queue.length) {
+      const currentId = queue.shift()
+      componentNodeIds.push(currentId)
+      for (const neighbor of adjacency.get(currentId) || []) {
+        if (visited.has(neighbor)) continue
+        visited.add(neighbor)
+        queue.push(neighbor)
+      }
+    }
+
+    const nodeIdSet = new Set(componentNodeIds)
+    const componentEdges = selectedEdges.filter((edge) => (
+      nodeIdSet.has(edge.source.id) && nodeIdSet.has(edge.target.id)
+    ))
+
+    components.push({
+      nodeCount: componentNodeIds.length,
+      edgeCount: componentEdges.length,
+      nodes: componentNodeIds
+        .map((id) => nodeById.get(id))
+        .filter(Boolean)
+        .map((item) => ({ id: item.id, name: item.name }))
+    })
+  })
+
+  return {
+    nodeCount: selectedNodes.length,
+    edgeCount: selectedEdges.length,
+    componentCount: components.length,
+    components,
+    types: Array.from(typeMap.entries()).map(([name, count]) => ({ name, count }))
+  }
+}
 
 const renderGraph = () => {
   if (!graphSvg.value || !props.graphData) return
@@ -490,6 +618,7 @@ const renderGraph = () => {
   
   // Zoom
   svg.call(d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on('zoom', (event) => {
+    currentTransform = event.transform
     g.attr('transform', event.transform)
   }))
 
@@ -577,10 +706,7 @@ const renderGraph = () => {
     .style('cursor', 'pointer')
     .on('click', (event, d) => {
       event.stopPropagation()
-      // 重置之前选中边的样式
-      linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 1.5)
-      linkLabelBg.attr('fill', 'rgba(255,255,255,0.95)')
-      linkLabels.attr('fill', '#666')
+      clearGraphSelection()
       // 高亮当前选中的边
       d3.select(event.target).attr('stroke', '#3498db').attr('stroke-width', 3)
       
@@ -602,9 +728,7 @@ const renderGraph = () => {
     .style('display', showEdgeLabels.value ? 'block' : 'none')
     .on('click', (event, d) => {
       event.stopPropagation()
-      linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 1.5)
-      linkLabelBg.attr('fill', 'rgba(255,255,255,0.95)')
-      linkLabels.attr('fill', '#666')
+      clearGraphSelection()
       // 高亮对应的边
       link.filter(l => l === d).attr('stroke', '#3498db').attr('stroke-width', 3)
       d3.select(event.target).attr('fill', 'rgba(52, 152, 219, 0.1)')
@@ -630,9 +754,7 @@ const renderGraph = () => {
     .style('display', showEdgeLabels.value ? 'block' : 'none')
     .on('click', (event, d) => {
       event.stopPropagation()
-      linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 1.5)
-      linkLabelBg.attr('fill', 'rgba(255,255,255,0.95)')
-      linkLabels.attr('fill', '#666')
+      clearGraphSelection()
       // 高亮对应的边
       link.filter(l => l === d).attr('stroke', '#3498db').attr('stroke-width', 3)
       d3.select(event.target).attr('fill', '#3498db')
@@ -697,9 +819,7 @@ const renderGraph = () => {
     )
     .on('click', (event, d) => {
       event.stopPropagation()
-      // 重置所有节点样式
-      node.attr('stroke', '#fff').attr('stroke-width', 2.5)
-      linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 1.5)
+      clearGraphSelection()
       // 高亮选中节点
       d3.select(event.target).attr('stroke', '#E91E63').attr('stroke-width', 4)
       // 高亮与此节点相连的边
@@ -725,6 +845,9 @@ const renderGraph = () => {
       }
     })
 
+  nodeRef = node
+  linkRef = link
+
   // Node Labels
   const nodeLabels = nodeGroup.selectAll('text')
     .data(nodes)
@@ -737,6 +860,62 @@ const renderGraph = () => {
     .attr('dy', 4)
     .style('pointer-events', 'none')
     .style('font-family', 'system-ui, sans-serif')
+
+  const brushLayer = svg.append('g')
+    .attr('class', 'brush-layer')
+    .style('display', rectSelectMode.value ? 'block' : 'none')
+
+  const brush = d3.brush()
+    .extent([[0, 0], [width, height]])
+    .on('end', (event) => {
+      if (!rectSelectMode.value || !event.selection) return
+
+      const [[x0, y0], [x1, y1]] = event.selection
+      const minX = currentTransform.invertX(Math.min(x0, x1))
+      const maxX = currentTransform.invertX(Math.max(x0, x1))
+      const minY = currentTransform.invertY(Math.min(y0, y1))
+      const maxY = currentTransform.invertY(Math.max(y0, y1))
+
+      const selectedNodes = nodes.filter((item) => (
+        item.x >= minX && item.x <= maxX && item.y >= minY && item.y <= maxY
+      ))
+      const selectedNodeIds = new Set(selectedNodes.map((item) => item.id))
+      const selectedEdges = edges.filter((item) => (
+        selectedNodeIds.has(item.source.id) && selectedNodeIds.has(item.target.id)
+      ))
+
+      clearGraphSelection()
+
+      if (selectedNodes.length === 0) {
+        brushLayer.call(brush.move, null)
+        return
+      }
+
+      node.filter((item) => selectedNodeIds.has(item.id))
+        .attr('stroke', '#0f172a')
+        .attr('stroke-width', 4)
+
+      link.filter((item) => selectedEdges.includes(item))
+        .attr('stroke', '#2563eb')
+        .attr('stroke-width', 3)
+
+      linkLabelBg.filter((item) => selectedEdges.includes(item))
+        .attr('fill', 'rgba(37,99,235,0.10)')
+
+      linkLabels.filter((item) => selectedEdges.includes(item))
+        .attr('fill', '#2563eb')
+
+      selectedItem.value = {
+        type: 'selection',
+        data: buildSelectionSummary(selectedNodes, selectedEdges)
+      }
+
+      brushLayer.call(brush.move, null)
+    })
+
+  if (rectSelectMode.value) {
+    brushLayer.call(brush)
+  }
 
   simulation.on('tick', () => {
     // 更新曲线路径
@@ -775,17 +954,17 @@ const renderGraph = () => {
   
   // 点击空白处关闭详情面板
   svg.on('click', () => {
-    selectedItem.value = null
-    node.attr('stroke', '#fff').attr('stroke-width', 2.5)
-    linkGroup.selectAll('path').attr('stroke', '#C0C0C0').attr('stroke-width', 1.5)
-    linkLabelBg.attr('fill', 'rgba(255,255,255,0.95)')
-    linkLabels.attr('fill', '#666')
+    clearGraphSelection()
   })
 }
 
 watch(() => props.graphData, () => {
   nextTick(renderGraph)
 }, { deep: true })
+
+watch(rectSelectMode, () => {
+  nextTick(renderGraph)
+})
 
 // 监听边标签显示开关
 watch(showEdgeLabels, (newVal) => {
@@ -873,6 +1052,13 @@ onUnmounted(() => {
   background: #F5F5F5;
   color: #000;
   border-color: #CCC;
+}
+
+.tool-btn.active {
+  background: #0f172a;
+  border-color: #0f172a;
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
 }
 
 .tool-btn .btn-text {
@@ -1177,6 +1363,55 @@ input:checked + .slider:before {
   border-radius: 16px;
   font-size: 11px;
   color: #555;
+}
+
+.component-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.component-item {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.component-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.component-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.component-meta {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.component-nodes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.component-node {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0c4a6e;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .episodes-list {
