@@ -29,9 +29,11 @@ import os
 import queue
 from datetime import datetime
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
-from flask import Blueprint, Flask, Response, jsonify, request, send_from_directory, stream_with_context
+from flask import Blueprint, Flask, Response, jsonify, redirect, request, send_from_directory, stream_with_context
 from flask_cors import CORS
 
 import time as _time
@@ -40,18 +42,44 @@ from . import attestation as attestation_mod
 from . import audit as audit_mod
 from . import bridge_client as bridge_mod
 from . import burner as burner_mod
+from . import capital as capital_mod
 from . import clob_client, encryptor, hook_client
 from . import keeperhub as keeperhub_mod
+from . import polygon_funding as polygon_funding_mod
 from . import tenants as tenants_mod
 from .daily_pack import DailyPackBuilder
 from .encryptor import SealedInput
 from .store import PositionRecord, PositionStore
+from .terminal_ticker import TerminalTicker
 
 log = logging.getLogger("meridian.execution.api")
 
 
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _fetch_json(url: str, *, timeout: float = 2.0) -> dict | None:
+    try:
+        req = Request(url, headers={"Accept": "application/json"})
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (OSError, URLError, json.JSONDecodeError):
+        return None
+
+
 def _to_uint128_amount(usdc_amount: float, decimals: int = 6) -> int:
     return int(round(usdc_amount * (10**decimals)))
+
+
+def _polygon_direct_balance(client) -> float | None:
+    if client is None:
+        return None
+    try:
+        return client.balance_usdc()
+    except Exception as e:  # noqa: BLE001
+        log.warning("polygon direct balance unavailable: %s", e)
+        return None
 
 
 def _sealed_from_payload(handle: dict) -> SealedInput:
@@ -90,7 +118,8 @@ def create_app() -> Flask:
 
     @app.get("/")
     def root_dashboard():
-        return send_from_directory(str(static_dir), "dashboard.html")
+        app_url = os.environ.get("MIROSHARK_APP_URL", "http://127.0.0.1:3000/")
+        return redirect(app_url, code=302)
 
     store = PositionStore()
     audit = audit_mod.from_env()
@@ -99,9 +128,11 @@ def create_app() -> Flask:
     keeperhub = keeperhub_mod.from_env()
     hook = hook_client.from_env(encryptor=enc, keeperhub=keeperhub)
     bridge = bridge_mod.from_env()
+    polygon_funding = polygon_funding_mod.from_env()
     pinner = attestation_mod.from_env()  # Bucket 4: per-position 0G attestation
     daily_pack = DailyPackBuilder(store=store, audit=audit, attestation=pinner)  # Bucket 5
     tenants = tenants_mod.from_env()  # Bucket 6: multi-tenant isolation
+    terminal_ticker = TerminalTicker(store=store, audit=audit)
 
     def _audit(event: str, *, position_id: str | None = None, status: str = "ok", payload: dict | None = None) -> None:
         # Audit writes must never break the request flow — swallow + warn.
@@ -114,13 +145,14 @@ def create_app() -> Flask:
     # Sepolia (Fhenix CoFHE); trading chain is Polygon Amoy (Polymarket).
     settlement_chain = os.environ.get("BRIDGE_SETTLEMENT_CHAIN", bridge_mod.DEFAULT_FROM_CHAIN)
     trading_chain = os.environ.get("BRIDGE_TRADING_CHAIN", bridge_mod.DEFAULT_TO_CHAIN)
+    polygon_first_funding = polygon_funding_mod.funding_mode() in {"polygon-direct", "polygon-modular"}
 
     bp = Blueprint("meridian_execution", __name__, url_prefix="/api/execution")
 
     @app.get("/health")
     def health():
         return {
-            "service": "MERIDIAN execution-router",
+            "service": "Miroshark execution router",
             "status": "ok",
             "phase": "5b",
             "wiring": {
@@ -248,34 +280,44 @@ def create_app() -> Flask:
         # balance; Circle's Forwarder mints USDC to the burner EOA on Polygon Amoy
         # so cogito doesn't need to hold a Polygon key or pay destination gas.
         try:
-            send_result = bridge.bridge(
-                signer="treasury",
-                from_chain=settlement_chain,
-                to_chain=trading_chain,
-                amount_usdc=float(usdc_amount),
-                recipient=burner.address,
-                use_forwarder=True,
-            )
-            record.bridge_send_burn_tx = send_result.burn_tx
-            record.bridge_send_mint_tx = send_result.mint_tx
-            if not send_result.ok:
-                record.status = "failed"
-                record.error = f"bridge send failed: {send_result.state}"
-                store.upsert(record)
-                _audit("bridge_send.err", position_id=position_id, status="err", payload={
-                    "state": send_result.state, "transfer_id": send_result.transfer_id,
+            if polygon_first_funding and polygon_funding is not None and trading_chain == "polygon_amoy":
+                send_result = polygon_funding.transfer_usdc(burner.address, float(usdc_amount))
+                record.bridge_send_mint_tx = send_result.tx_hash
+                _audit("polygon_fund.ok", position_id=position_id, payload={
+                    "from": polygon_funding.address,
+                    "to": burner.address,
+                    "amount": float(usdc_amount),
+                    "tx_hash": send_result.tx_hash,
                 })
-                return jsonify({"error": record.error, "position": record.to_json()}), 502
-            _audit("bridge_send.ok", position_id=position_id, payload={
-                "from": settlement_chain, "to": trading_chain,
-                "amount": float(usdc_amount),
-                "transfer_id": send_result.transfer_id,
-                "burn_tx": send_result.burn_tx, "mint_tx": send_result.mint_tx,
-                "dry_run": send_result.dry_run,
-            })
+            else:
+                send_result = bridge.bridge(
+                    signer="treasury",
+                    from_chain=settlement_chain,
+                    to_chain=trading_chain,
+                    amount_usdc=float(usdc_amount),
+                    recipient=burner.address,
+                    use_forwarder=True,
+                )
+                record.bridge_send_burn_tx = send_result.burn_tx
+                record.bridge_send_mint_tx = send_result.mint_tx
+                if not send_result.ok:
+                    record.status = "failed"
+                    record.error = f"bridge send failed: {send_result.state}"
+                    store.upsert(record)
+                    _audit("bridge_send.err", position_id=position_id, status="err", payload={
+                        "state": send_result.state, "transfer_id": send_result.transfer_id,
+                    })
+                    return jsonify({"error": record.error, "position": record.to_json()}), 502
+                _audit("bridge_send.ok", position_id=position_id, payload={
+                    "from": settlement_chain, "to": trading_chain,
+                    "amount": float(usdc_amount),
+                    "transfer_id": send_result.transfer_id,
+                    "burn_tx": send_result.burn_tx, "mint_tx": send_result.mint_tx,
+                    "dry_run": send_result.dry_run,
+                })
         except Exception as e:  # noqa: BLE001
             record.status = "failed"
-            record.error = f"bridge send: {e}"
+            record.error = f"fund trading rail: {e}"
             store.upsert(record)
             _audit("bridge_send.err", position_id=position_id, status="err", payload={"error": str(e)})
             return jsonify({"error": record.error, "position": record.to_json()}), 502
@@ -515,6 +557,214 @@ def create_app() -> Flask:
                 for cfg in tenants.list()
             ],
         })
+
+    @bp.get("/operator/status")
+    def operator_status():
+        try:
+            from orchestrator.loop import LoopConfig
+
+            cfg = LoopConfig.from_env()
+            records = store.list()
+            cogito_base = os.environ.get("COGITO_BASE_URL") or os.environ.get("COGITO_URL") or "http://127.0.0.1:5003"
+            cogito_health = _fetch_json(f"{cogito_base.rstrip('/')}/health") or {}
+            bridge_ready = bool(cogito_health.get("bridge", {}).get("ready")) if cogito_health else bridge is not None
+            fhe_ready = bool(cogito_health.get("fhe", {}).get("ready")) if cogito_health else False
+            zg_storage_ready = bool(cogito_health.get("storage", {}).get("ok")) if cogito_health else False
+            zg_compute_ready = bool(cogito_health.get("compute", {}).get("ok")) if cogito_health else False
+            gateway_balance = cogito_health.get("gateway", {}).get("treasuryBalance")
+            swarm_backend = os.environ.get("SWARM_BACKEND", "lite").strip().lower() or "lite"
+            openclaw_enabled = _env_truthy("OPENCLAW_OPERATOR_ENABLED")
+            openclaw_session = bool(os.environ.get("OPENCLAW_SESSION"))
+            polymarket_chain_id = int(os.environ.get("POLYMARKET_CHAIN_ID", "137") or "137")
+            hook_ready = hook is not None
+            treasury_key_ready = bool(os.environ.get("TREASURY_PRIVATE_KEY"))
+            polymarket_key_ready = bool(os.environ.get("POLYMARKET_PRIVATE_KEY"))
+            burner_seed_ready = bool(os.environ.get("BURNER_SEED"))
+            hook_address_ready = bool(os.environ.get("MERIDIAN_HOOK_ADDRESS"))
+            arb_rpc_ready = bool(
+                os.environ.get("ARB_SEPOLIA_RPC_URL")
+                or os.environ.get("ARBITRUM_SEPOLIA_RPC_URL")
+                or os.environ.get("BASE_SEPOLIA_RPC_URL")
+                or os.environ.get("RPC_URL")
+            )
+            fhe_key_ready = bool(os.environ.get("FHE_PRIVATE_KEY") or os.environ.get("TREASURY_PRIVATE_KEY"))
+            zg_key_ready = bool(os.environ.get("ZG_PRIVATE_KEY"))
+            axl_ready = swarm_backend == "axl"
+
+            sponsors = [
+                {
+                    "key": "0g",
+                    "label": "0G",
+                    "ready": zg_storage_ready and zg_compute_ready,
+                    "mode": "live" if zg_storage_ready and zg_compute_ready else "degraded",
+                    "detail": "storage + compute anchoring for swarm runs",
+                    "blocker": None if zg_storage_ready and zg_compute_ready else "set ZG_PRIVATE_KEY and fund Galileo ledger",
+                },
+                {
+                    "key": "axl",
+                    "label": "Gensyn AXL",
+                    "ready": axl_ready,
+                    "mode": swarm_backend,
+                    "detail": "multi-agent mesh for swarm debate",
+                    "blocker": None if axl_ready else "set SWARM_BACKEND=axl for cross-node swarm runs",
+                },
+                {
+                    "key": "fhenix",
+                    "label": "Fhenix CoFHE",
+                    "ready": fhe_ready and hook_ready,
+                    "mode": "live" if fhe_ready and hook_ready else "degraded",
+                    "detail": "encrypted notional and payout handling",
+                    "blocker": None if fhe_ready and hook_ready else "configure FHE signer and deploy hook on Arbitrum Sepolia",
+                },
+                {
+                    "key": "uniswap",
+                    "label": "Uniswap v4",
+                    "ready": hook_ready,
+                    "mode": "hook-live" if hook_ready else "offline",
+                    "detail": "PrivateSettlementHook settlement rail",
+                    "blocker": None if hook_ready else "set ARB_SEPOLIA_RPC_URL and MERIDIAN_HOOK_ADDRESS",
+                },
+                {
+                    "key": "circle",
+                    "label": "Circle CCTP",
+                    "ready": bridge_ready and treasury_key_ready,
+                    "mode": "forwarder" if bridge_ready and treasury_key_ready else "offline",
+                    "detail": "unified balance bridge between settlement and trading",
+                    "blocker": None if bridge_ready and treasury_key_ready else "set TREASURY_PRIVATE_KEY and pre-seed Gateway balance",
+                },
+                {
+                    "key": "polymarket",
+                    "label": "Polymarket",
+                    "ready": polymarket_key_ready and polymarket_chain_id == 80002,
+                    "mode": "live" if polymarket_key_ready and polymarket_chain_id == 80002 else "dry-run",
+                    "detail": "real CLOB execution on Polygon Amoy",
+                    "blocker": None if polymarket_key_ready and polymarket_chain_id == 80002 else "set POLYMARKET_PRIVATE_KEY and POLYMARKET_CHAIN_ID=80002",
+                },
+                {
+                    "key": "openclaw",
+                    "label": "OpenClaw",
+                    "ready": openclaw_enabled or openclaw_session,
+                    "mode": "attached" if openclaw_session else "enabled" if openclaw_enabled else "manual",
+                    "detail": "24/7 human+AI operator automation lane",
+                    "blocker": None if openclaw_enabled or openclaw_session else "set OPENCLAW_OPERATOR_ENABLED and wire an operator session",
+                },
+            ]
+
+            next_blockers: list[str] = []
+            if not burner_seed_ready:
+                next_blockers.append("Set BURNER_SEED for deterministic per-position wallets.")
+            if not polymarket_key_ready:
+                next_blockers.append("Set POLYMARKET_PRIVATE_KEY for real Polymarket CLOB orders.")
+            if polymarket_chain_id != 80002:
+                next_blockers.append("Set POLYMARKET_CHAIN_ID=80002 for Polygon Amoy.")
+            if not treasury_key_ready:
+                next_blockers.append("Set TREASURY_PRIVATE_KEY for bridge burns and settlement calls.")
+            if not hook_address_ready or not arb_rpc_ready:
+                next_blockers.append("Set ARB_SEPOLIA_RPC_URL and MERIDIAN_HOOK_ADDRESS for the Uniswap/Fhenix settlement rail.")
+            if bridge_ready and gateway_balance in (0, 0.0, "0", "0.0", None):
+                next_blockers.append("Pre-seed the Circle Gateway treasury balance on Arbitrum Sepolia.")
+            if not zg_key_ready:
+                next_blockers.append("Set ZG_PRIVATE_KEY to enable 0G Storage and 0G Compute.")
+            if not axl_ready:
+                next_blockers.append("Set SWARM_BACKEND=axl so the swarm runs on the Gensyn mesh.")
+            if not (openclaw_enabled or openclaw_session):
+                next_blockers.append("Wire OpenClaw so the operator loop can run 24/7.")
+
+            capital_plane = capital_mod.build_capital_snapshot(
+                cfg=cfg,
+                positions=records,
+                cogito_health=cogito_health,
+                direct_polygon_balance_usdc=_polygon_direct_balance(polygon_funding),
+                keeperhub_ready=keeperhub is not None,
+                openclaw_enabled=openclaw_enabled,
+                openclaw_session=openclaw_session,
+            )
+
+            return jsonify({
+                "service": "Miroshark operator",
+                "status": "ok",
+                "mode": "dry-run" if cfg.dry_run else "live",
+                "interval_s": cfg.interval_s,
+                "max_positions_per_cycle": cfg.max_positions_per_cycle,
+                "strategies": cfg.strategies,
+                "capital": {
+                    "total_capital": float(cfg.total_capital),
+                    "per_position_max": float(cfg.per_position_max),
+                    "global_max_open_positions": cfg.global_max_open_positions,
+                },
+                "thresholds": {
+                    "directional_min_edge_pp": cfg.min_edge_pp,
+                    "directional_min_confidence": cfg.min_confidence,
+                    "arb_min_edge_pp": cfg.min_arb_edge_pp,
+                    "arb_min_score": cfg.min_arb_score,
+                },
+                "automation": {
+                    "openclaw_enabled": openclaw_enabled,
+                    "openclaw_session": openclaw_session,
+                    "openclaw_operator": os.environ.get("OPENCLAW_OPERATOR_NAME") or None,
+                    "kill_switch_enabled": bool(os.environ.get("EXECUTION_KILL_TOKEN")),
+                },
+                "sponsors": sponsors,
+                "wallets": {
+                    "burner_seed_ready": burner_seed_ready,
+                    "treasury_key_ready": treasury_key_ready,
+                    "polymarket_key_ready": polymarket_key_ready,
+                    "fhe_key_ready": fhe_key_ready,
+                    "zg_key_ready": zg_key_ready,
+                    "hook_address_ready": hook_address_ready,
+                    "settlement_rpc_ready": arb_rpc_ready,
+                    "gateway_treasury_balance": gateway_balance,
+                },
+                "capital_plane": capital_plane,
+                "next_blockers": next_blockers,
+            })
+        except Exception as e:  # noqa: BLE001
+            log.warning("operator status unavailable: %s", e)
+            return jsonify({
+                "service": "Miroshark operator",
+                "status": "degraded",
+                "error": str(e),
+            }), 200
+
+    @bp.get("/capital/status")
+    def capital_status():
+        try:
+            from orchestrator.loop import LoopConfig
+
+            cfg = LoopConfig.from_env()
+            cogito_base = os.environ.get("COGITO_BASE_URL") or os.environ.get("COGITO_URL") or "http://127.0.0.1:5003"
+            cogito_health = _fetch_json(f"{cogito_base.rstrip('/')}/health") or {}
+            openclaw_enabled = _env_truthy("OPENCLAW_OPERATOR_ENABLED")
+            openclaw_session = bool(os.environ.get("OPENCLAW_SESSION"))
+            snapshot = capital_mod.build_capital_snapshot(
+                cfg=cfg,
+                positions=store.list(),
+                cogito_health=cogito_health,
+                direct_polygon_balance_usdc=_polygon_direct_balance(polygon_funding),
+                keeperhub_ready=keeperhub is not None,
+                openclaw_enabled=openclaw_enabled,
+                openclaw_session=openclaw_session,
+            )
+            return jsonify({"status": "ok", "capital": snapshot})
+        except Exception as e:  # noqa: BLE001
+            log.warning("capital status unavailable: %s", e)
+            return jsonify({"status": "degraded", "error": str(e)}), 200
+
+    @bp.get("/terminal/ticker")
+    def terminal_ticker_snapshot():
+        force = request.args.get("force", "").strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            return jsonify(terminal_ticker.snapshot(force=force))
+        except Exception as e:  # noqa: BLE001
+            log.warning("terminal ticker unavailable: %s", e)
+            return jsonify({
+                "headlines": [],
+                "prices": [],
+                "events": [],
+                "tape": [],
+                "updated_at": None,
+                "error": str(e),
+            }), 200
 
     @bp.get("/positions/stream")
     def positions_stream():

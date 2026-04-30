@@ -31,7 +31,7 @@ import { ComputeClient, TESTNET_PROVIDERS } from "./compute.js";
 import { createBridgeRoutes } from "./bridge.js";
 import { createFheRoutes } from "./fhe.js";
 
-const REQUIRED_ENV = ["ZG_RPC_URL", "ZG_INDEXER_URL", "ZG_PRIVATE_KEY", "COGITO_TOKEN"] as const;
+const REQUIRED_ENV = ["ZG_RPC_URL", "ZG_INDEXER_URL", "COGITO_TOKEN"] as const;
 for (const k of REQUIRED_ENV) {
   if (!process.env[k]) {
     console.error(`cogito: missing required env ${k}`);
@@ -45,18 +45,30 @@ const TOKEN = process.env.COGITO_TOKEN!;
 const MAX_BODY_BYTES = Number(process.env.COGITO_MAX_BODY_BYTES ?? 1_048_576); // 1 MB
 const RATE_LIMIT_PER_MIN = Number(process.env.COGITO_RATE_LIMIT_PER_MIN ?? 60);
 
-const zg = new ZgClient({
-  rpcUrl: process.env.ZG_RPC_URL!,
-  indexerUrl: process.env.ZG_INDEXER_URL!,
-  privateKey: process.env.ZG_PRIVATE_KEY!,
-});
+const zgPrivateKey = process.env.ZG_PRIVATE_KEY?.trim();
+const storageReady = !!zgPrivateKey;
+const computeReady = !!zgPrivateKey;
 
-const compute = new ComputeClient({
-  rpcUrl: process.env.ZG_RPC_URL!,
-  privateKey: process.env.ZG_PRIVATE_KEY!,
-});
+const zg = storageReady
+  ? new ZgClient({
+      rpcUrl: process.env.ZG_RPC_URL!,
+      indexerUrl: process.env.ZG_INDEXER_URL!,
+      privateKey: zgPrivateKey!,
+    })
+  : null;
 
-console.log(`cogito: signer address ${zg.address}`);
+const compute = computeReady
+  ? new ComputeClient({
+      rpcUrl: process.env.ZG_RPC_URL!,
+      privateKey: zgPrivateKey!,
+    })
+  : null;
+
+if (zg) {
+  console.log(`cogito: signer address ${zg.address}`);
+} else {
+  console.log("cogito: storage + compute offline (set ZG_PRIVATE_KEY to enable 0G routes)");
+}
 
 const bridgeRoutes = createBridgeRoutes();
 console.log(`cogito: bridge route ${bridgeRoutes.ready ? "ready" : "offline (set TREASURY_PRIVATE_KEY)"}`);
@@ -71,6 +83,20 @@ console.log(
 const app = new Hono();
 app.use("*", logger());
 app.use("*", secureHeaders());
+
+function requireStorage(): ZgClient {
+  if (!zg) {
+    throw new HTTPException(503, { message: "0G storage offline (set ZG_PRIVATE_KEY)" });
+  }
+  return zg;
+}
+
+function requireCompute(): ComputeClient {
+  if (!compute) {
+    throw new HTTPException(503, { message: "0G compute offline (set ZG_PRIVATE_KEY)" });
+  }
+  return compute;
+}
 
 // constant-time bearer token check
 function tokenMatches(provided: string, expected: string): boolean {
@@ -120,11 +146,23 @@ app.use("*", bodyLimit({ maxSize: MAX_BODY_BYTES, onError: () => {
 app.get("/health", (c) => c.json({
   service: "cogito",
   status: "ok",
-  signer: zg.address,
+  signer: zg?.address ?? null,
   rpc: process.env.ZG_RPC_URL,
   indexer: process.env.ZG_INDEXER_URL,
   capabilities: ["storage", "compute", "bridge", "fhe"],
+  storage: {
+    ok: storageReady,
+    signer: zg?.address ?? null,
+  },
+  compute: {
+    ok: computeReady,
+    signer: compute?.address ?? null,
+  },
   bridge: { ready: bridgeRoutes.ready },
+  gateway: {
+    ready: bridgeRoutes.ready,
+    treasuryBalance: 0,
+  },
   fhe: { ready: fheRoutes.ready, signer: fheRoutes.signer },
   models: Object.keys(TESTNET_PROVIDERS),
 }));
@@ -152,7 +190,7 @@ app.post("/upload", async (c) => {
     meta: meta ?? {},
     payload,
   };
-  const result = await zg.upload(wrapped);
+  const result = await requireStorage().upload(wrapped);
   return c.json({ ...result, kind });
 });
 
@@ -161,7 +199,7 @@ app.get("/download/:root_hash", async (c) => {
   if (!/^0x[0-9a-fA-F]{2,}$/.test(root)) {
     throw new HTTPException(400, { message: "root_hash must be hex" });
   }
-  const bytes = await zg.download(root, true);
+  const bytes = await requireStorage().download(root, true);
   // Bytes are already JSON — pass through as text so Python clients can re-parse.
   return new Response(new Blob([bytes as BlobPart]), {
     status: 200,
@@ -172,20 +210,21 @@ app.get("/download/:root_hash", async (c) => {
 // ── compute (0G DeAIOS) ───────────────────────────────────────────────────────
 
 app.get("/compute/services", async (c) => {
-  const services = await compute.listServices();
+  const services = await requireCompute().listServices();
   return c.json({ count: services.length, services });
 });
 
 app.get("/compute/account", async (c) => {
-  const ledger = await compute.getLedger();
-  return c.json({ address: compute.address, ledger });
+  const client = requireCompute();
+  const ledger = await client.getLedger();
+  return c.json({ address: client.address, ledger });
 });
 
 const SetupBody = z.object({ amount: z.number().positive() });
 app.post("/compute/account/setup", async (c) => {
   const parsed = SetupBody.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) throw new HTTPException(400, { message: parsed.error.message });
-  await compute.addLedger(parsed.data.amount);
+  await requireCompute().addLedger(parsed.data.amount);
   return c.json({ ok: true, message: `addLedger(${parsed.data.amount}) ok` });
 });
 
@@ -193,7 +232,7 @@ const AckBody = z.object({ provider: z.string().regex(/^0x[0-9a-fA-F]{40}$/) });
 app.post("/compute/provider/ack", async (c) => {
   const parsed = AckBody.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) throw new HTTPException(400, { message: parsed.error.message });
-  await compute.ackProvider(parsed.data.provider);
+  await requireCompute().ackProvider(parsed.data.provider);
   return c.json({ ok: true, provider: parsed.data.provider });
 });
 
@@ -204,7 +243,7 @@ const FundBody = z.object({
 app.post("/compute/provider/fund", async (c) => {
   const parsed = FundBody.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) throw new HTTPException(400, { message: parsed.error.message });
-  await compute.transferToProvider(parsed.data.provider, parsed.data.amount);
+  await requireCompute().transferToProvider(parsed.data.provider, parsed.data.amount);
   return c.json({ ok: true, provider: parsed.data.provider, amount: parsed.data.amount });
 });
 
@@ -221,7 +260,7 @@ const InferenceBody = z.object({
 app.post("/compute/inference", async (c) => {
   const parsed = InferenceBody.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) throw new HTTPException(400, { message: parsed.error.message });
-  const result = await compute.inference(parsed.data);
+  const result = await requireCompute().inference(parsed.data);
   return c.json(result);
 });
 

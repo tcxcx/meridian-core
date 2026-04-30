@@ -287,7 +287,7 @@ def create_app() -> Flask:
     def health():
         zg_status = zg_client.get_client().health()
         return {
-            "service": "MERIDIAN signal-gateway",
+            "service": "Miroshark signal gateway",
             "status": "ok",
             "phase": "3",
             "zg_anchor": zg_status,

@@ -1,21 +1,38 @@
 {
-  "name": "mirofish",
-  "version": "0.1.0",
-  "description": "MiroFish - 简洁通用的群体智能引擎，预测万物",
+  "name": "miroshark",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Miroshark - unified operator terminal for graph-native swarm trading",
   "scripts": {
-    "setup": "npm install && cd frontend && npm install",
+    "setup": "npm install",
     "setup:backend": "cd backend && uv sync",
     "setup:all": "npm run setup && npm run setup:backend",
-    "dev": "concurrently --kill-others -n \"backend,frontend\" -c \"green,cyan\" \"npm run backend\" \"npm run frontend\"",
+    "dev": "next dev",
+    "dev:full": "concurrently --kill-others -n \"backend,signal,execution,app\" -c \"green,magenta,blue,cyan\" \"npm run backend\" \"npm run signal\" \"npm run execution\" \"npm run dev\"",
     "backend": "cd backend && uv run python run.py",
-    "frontend": "cd frontend && npm run dev",
-    "build": "cd frontend && npm run build"
+    "signal": "cd services && uv run --env-file ../.env python -m meridian_signal.api",
+    "execution": "cd services && uv run --env-file ../.env python -m execution_router.api",
+    "orchestrator": "cd services && uv run --env-file ../.env python -m orchestrator",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@circle-fin/adapter-viem-v2": "^1.8.3",
+    "@circle-fin/app-kit": "^1.4.1",
+    "@circle-fin/modular-wallets-core": "^1.0.13",
+    "@simplewebauthn/server": "^13.2.2",
+    "d3": "^7.9.0",
+    "next": "^16.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "recharts": "^3.8.1",
+    "viem": "^2.48.4"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.9.0"
   },
   "license": "AGPL-3.0"
 }

@@ -1,14 +1,14 @@
-# MERIDIAN
+# MIROSHARK
 
 > **Confidential autonomous prediction-market hedge fund.** Multi-agent LLM swarm scans Polymarket, ranks markets by edge × confidence, and trades through per-position burner EOAs whose treasury funding flow is encrypted with FHE on a Uniswap v4 hook.
 
-Forked from [`666ghj/MiroFish`](https://github.com/666ghj/MiroFish). The MiroFish swarm engine is the brain; everything in `services/`, `contracts/`, and the cross-chain settlement plumbing is MERIDIAN.
+Forked from [`666ghj/MiroFish`](https://github.com/666ghj/MiroFish). The original graph-analysis engine has been absorbed into `Miroshark`; the only app surface in this repo is the unified Next.js operator terminal.
 
 ---
 
 ## Pitch
 
-Polymarket trades are public. Position sizes leak. Copy-traders front-run. A serious desk that believes in a market for non-trivial size cannot trade it without telegraphing exactly how much they believe. MiroShark fixes that: encrypted sizing on a Fhenix CoFHE Uniswap v4 hook, fresh per-position burner EOAs, Circle Gateway crosschain settlement, Polymarket CLOB execution, all coordinated by a Gensyn AXL swarm and pinned to 0G Storage with a daily verifiable PnL pack anyone can audit. **Multi-tenant out of the box** — fork the kit and run your own confidential fund on the same rails.
+Polymarket trades are public. Position sizes leak. Copy-traders front-run. A serious desk that believes in a market for non-trivial size cannot trade it without telegraphing exactly how much they believe. Miroshark fixes that: encrypted sizing on a Fhenix CoFHE Uniswap v4 hook, fresh per-position burner EOAs, Circle Gateway crosschain settlement, Polymarket CLOB execution, all coordinated by a Gensyn AXL swarm and pinned to 0G Storage with a daily verifiable PnL pack anyone can audit. **Multi-tenant out of the box** — fork the kit and run your own confidential fund on the same rails.
 
 Full pitch: [`docs/PITCH.md`](./docs/PITCH.md). 3-minute demo script: [`docs/demo-script.md`](./docs/demo-script.md).
 
@@ -68,17 +68,18 @@ The privacy property: an on-chain observer sees one anonymous burner EOA per pos
 ```bash
 cp .env.example .env       # fill in keys + RPC URLs
 make install               # uv sync + bun install + forge install
-make demo                  # boots cogito (5003) + signal-gateway (5002) + execution-router (5004) + orchestrator (one tick)
+make demo                  # boots the integrated app + sidecars + one orchestrator tick
 ```
 
-Then open the operator dashboard at **http://127.0.0.1:5004/** and watch positions flow through `funding → bridged → open → resolving → settled`.
+Then open the unified operator terminal at **http://127.0.0.1:3000/** and watch positions flow through `funding → bridged → open → resolving → settled`.
 
 ### Manual control
 
 ```bash
+make app                   # Miroshark terminal (Next.js, :3000)
 make cogito                # cogito sidecar (Bun, :5003)
 make signal                # signal-gateway (Flask, :5002)
-make execution             # execution-router (Flask, :5004) — also serves dashboard at /
+make execution             # execution-router (Flask, :5004)
 make orchestrator-once     # single tick: scan → rank → open up to N positions
 make orchestrator-loop     # daemon loop (interval = $ORCHESTRATOR_INTERVAL_S)
 make orchestrator-dry      # daemon, log-only, never hits /open
@@ -109,19 +110,20 @@ This is a hackathon — graceful is the point. Demos still run when sponsors' te
 meridian-core/
 ├── contracts/                Foundry. PrivateSettlementHook + HybridFHERC20 (fhUSDC).
 │   └── script/               Deploy + pool-create + swap scripts.
+├── app/                      Next.js app router shell for the unified operator terminal.
+├── components/miroshark/     React/D3 terminal + graph components.
+├── lib/                      Opportunity graph + terminal helpers.
 ├── services/
 │   ├── meridian_signal/      Flask :5002 — Polymarket scanner + swarm gateway.
 │   ├── swarm_runner/         3-node Gensyn AXL mesh (SWARM_BACKEND=axl).
 │   ├── cogito/               Hono+Bun :5003 — wraps 0G Storage, 0G Compute, Bridge Kit, cofhejs.
-│   ├── execution_router/     Flask :5004 — burner EOAs + bridge + CLOB + KeeperHub. Serves dashboard.
+│   ├── execution_router/     Flask :5004 — burner EOAs + bridge + CLOB + KeeperHub APIs.
 │   ├── orchestrator/         Autonomous CLI loop (`python -m orchestrator [once|dry|loop]`).
 │   └── README.md             Full env table + per-service docs.
-├── backend/                  Upstream MiroFish (Python). Don't modify; we sit beside it.
-├── frontend/                 Upstream MiroFish (Node). Untouched in this branch.
+├── backend/                  Analysis backend powering graph, simulation, and report APIs.
 ├── .context/meridian/        Spec, build plan, sponsor docs (LLM context dir).
 ├── CLAUDE.md                 Agent-facing context (phase table, conventions).
 ├── LESSONS.md                Append-only running log of gotchas + rationale.
-├── INJECTION_POINTS.md       Where MERIDIAN hooks into upstream MiroFish.
 ├── Makefile                  see Quickstart above.
 └── .env.example              all required + optional env vars with safe placeholders.
 ```
@@ -140,4 +142,4 @@ See [`LESSONS.md`](./LESSONS.md) for the running log. Active items:
 
 ## License
 
-Forked from [666ghj/MiroFish](https://github.com/666ghj/MiroFish). MERIDIAN-specific code is MIT (see [`LICENSE`](./LICENSE)). Upstream attribution preserved in [`README-ZH.md`](./README-ZH.md).
+Forked from [666ghj/MiroFish](https://github.com/666ghj/MiroFish). Miroshark-specific code is MIT (see [`LICENSE`](./LICENSE)).

@@ -39,7 +39,7 @@ The privacy property is the whole point: an on-chain observer sees one anonymous
 - **Execution router** (`:5004`): burner derivation, fund/bridge/order/resolve/settle pipeline, per-position pin to 0G, append-only audit log with secrets redacted, SSE position stream, multi-tenant Allocator gates (400/403/422 on unknown tenant / disallowed strategy / oversize).
 - **Daily verifiable PnL pack** (`meridian/daily-pack/v1`): walks the audit log for the UTC date window, joins to position store, byte-deterministic JSON pinned to 0G, served at `/verifier/<tenant>/<date>`. 9/9 smokes.
 - **Multi-tenant isolation** (Bucket 6): tenant registry from env, per-tenant burner namespace with `default` aliasing the prior layout (zero-migration for existing rows), per-tenant pack subdirs, tenant-scoped audit metadata. 9/9 smokes.
-- **Operator dashboard** at `:5004/`: brutalist white + electric blue (`#0000FF`), JetBrains Mono, three-act journey (INTEL → DELIBERATION → EXECUTION), eleven-event proof-of-execution timeline per position.
+- **Unified operator terminal** at `:3000/`: brutalist white + electric blue (`#0000FF`), JetBrains Mono, three-act journey (INTEL → DELIBERATION → EXECUTION), eleven-event proof-of-execution timeline per position.
 
 ## Who it's for
 
@@ -53,7 +53,7 @@ The privacy property is the whole point: an on-chain observer sees one anonymous
 
 ```bash
 cp .env.example .env && make install && make demo
-open http://127.0.0.1:5004/
+open http://127.0.0.1:3000/
 ```
 
 Watch positions flow through `funding → bridged → open → resolving → settled`. Click into any to see the burner address, the encrypted fund tx, the Gateway transferIds, the Polymarket order, and the eleven-event audit timeline.

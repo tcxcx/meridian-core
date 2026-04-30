@@ -6,7 +6,7 @@ prize sees its surface land.
 
 Capture setup:
 
-- Browser: Chrome 1440×1100, no devtools, dashboard at `http://127.0.0.1:5004/`.
+- Browser: Chrome 1440×1100, no devtools, operator terminal at `http://127.0.0.1:3000/`.
 - Voice: dry, builder-tone. Read at ~155 wpm.
 - Screen recorder: Quicktime or OBS 60fps. Cursor visible.
 - Audio: lavalier or AirPods, no music bed (legibility > polish).
@@ -23,7 +23,7 @@ Capture setup:
 
 ## ACT 1 · INTEL · `0:00 → 0:50`
 
-**Visual:** dashboard at `:5004/`. Page loads cold, sidebar JOURNEY shows
+**Visual:** operator terminal at `:3000/`. Page loads cold, sidebar JOURNEY shows
 INTEL highlighted. Cursor hovers the **`SCAN MARKETS`** button.
 
 **Voice (0:00 → 0:08):**

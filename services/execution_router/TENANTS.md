@@ -46,7 +46,7 @@ So `fund-a` reads `TENANT_FUND_A_*`. Lowercase, hyphens, digits OK in the id.
 | `TENANT_<ID>_CAPITAL` | `100` | Total USDC the Allocator may deploy on this tenant's behalf. Decimal string, USDC units (not wei). |
 | `TENANT_<ID>_PER_POSITION_MAX` | `25` | Hard cap on `usdc_amount` for any single position. Oversize requests `422` at `/api/execution/open`. |
 | `TENANT_<ID>_STRATEGIES` | empty → permissive | Comma-separated strategy whitelist. Empty set = allow all (legacy behavior). Disallowed strategies `403` at `/api/execution/open`. |
-| `TENANT_<ID>_LABEL` | the tenant id | Free-form display label for the verifier UI. |
+| `TENANT_<ID>_LABEL` | the tenant id | Free-form display label for the verifier UI. Quote values that contain spaces. |
 
 ---
 

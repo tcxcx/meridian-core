@@ -141,6 +141,16 @@ def _rpc_chain_id(name: str, url: str, expected: int) -> CheckResult:
     return CheckResult(f"{name} RPC", True, f"chainId={chain_id} ({url})")
 
 
+def _int_env(key: str, default: int) -> int:
+    raw = os.environ.get(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 # ── tier check builders ──────────────────────────────────────────────────────
 
 def t0_always_on() -> list[CheckResult]:
@@ -219,7 +229,7 @@ def t5_real_0g() -> list[CheckResult]:
     out: list[CheckResult] = []
     ok, det = _hex_key("ZG_PRIVATE_KEY")
     out.append(CheckResult("ZG_PRIVATE_KEY valid hex", ok, det))
-    out.append(_rpc_chain_id("ZG_RPC", os.environ.get("ZG_RPC_URL", ""), 16601))
+    out.append(_rpc_chain_id("ZG_RPC", os.environ.get("ZG_RPC_URL", ""), _int_env("ZG_CHAIN_ID", 16602)))
     base = os.environ.get("COGITO_URL", "http://127.0.0.1:5003").rstrip("/")
     token = os.environ.get("COGITO_TOKEN", "")
     status, body = _http_json(f"{base}/health",
@@ -248,8 +258,16 @@ def t6_real_fhe() -> list[CheckResult]:
     base = os.environ.get("COGITO_URL", "http://127.0.0.1:5003").rstrip("/")
     token = os.environ.get("COGITO_TOKEN", "")
     headers = {"authorization": f"Bearer {token}", "content-type": "application/json"} if token else {}
-    body = json.dumps({"value": "1", "sender": "0x0000000000000000000000000000000000000001"}).encode()
-    status, payload = _http_json(f"{base}/fhe/encrypt", method="POST", body=body, headers=headers)
+    status_health, payload_health = _http_json(
+        f"{base}/health",
+        headers={"authorization": f"Bearer {token}"} if token else None,
+    )
+    signer = None
+    if status_health == 200 and isinstance(payload_health, dict):
+        signer = ((payload_health.get("fhe") or {}).get("signer")) if isinstance(payload_health.get("fhe"), dict) else None
+    sender = signer if isinstance(signer, str) and signer.startswith("0x") else "0x0000000000000000000000000000000000000001"
+    body = json.dumps({"value": "1", "sender": sender}).encode()
+    status, payload = _http_json(f"{base}/fhe/encrypt", method="POST", body=body, headers=headers, timeout=15.0)
     encrypt_ok = status == 200 and isinstance(payload, dict) and "ctHash" in payload
     out.append(CheckResult("cogito POST /fhe/encrypt mints InEuint128",
                            encrypt_ok,

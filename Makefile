@@ -1,13 +1,14 @@
-# MERIDIAN dev orchestration.
+# MIROSHARK dev orchestration.
 #
-# Targets boot the four hackathon services in the right order:
+# Targets boot the integrated stack in the right order:
+#   app         (Next.js, :3000) — unified Miroshark operator terminal
 #   cogito      (Bun, :5003)   — TS/WASM sidecar (0G + Bridge Kit + cofhejs)
 #   signal      (Flask, :5002) — Polymarket scanner + swarm gateway
-#   execution   (Flask, :5004) — burner + bridge + CLOB + dashboard
+#   execution   (Flask, :5004) — burner + bridge + CLOB + API surface
 #   orchestrator                — autonomous loop (depends on the three above)
 #
-# `make demo` boots the three sidecars in the background, runs one orchestrator
-# tick, then leaves them up so you can poke the dashboard at :5004/.
+# `make demo` boots the app and sidecars in the background, runs one orchestrator
+# tick, then leaves them up so you can poke the operator terminal at :3000/.
 # `make stop` cleans up.
 
 SHELL := /bin/bash
@@ -18,19 +19,20 @@ LOGDIR     := $(ROOT)/.log
 ENV_FILE   := $(ROOT)/.env
 
 .PHONY: help install install-services install-cogito install-contracts \
-        cogito signal execution orchestrator-once orchestrator-loop orchestrator-dry \
+        app cogito signal execution orchestrator-once orchestrator-loop orchestrator-dry \
         demo stop status \
         contracts-test typecheck \
         smoke-keeperhub preflight e2e-real \
         clean
 
 help:
-	@echo "MERIDIAN make targets:"
+	@echo "MIROSHARK make targets:"
 	@echo "  install            uv sync + bun install + forge install"
-	@echo "  demo               boot cogito + signal + execution, run one orchestrator tick"
+	@echo "  demo               boot app + cogito + signal + execution, run one orchestrator tick"
+	@echo "  app                run the Next.js operator terminal (foreground)"
 	@echo "  cogito             run cogito sidecar (foreground)"
 	@echo "  signal             run signal-gateway (foreground)"
-	@echo "  execution          run execution-router + dashboard (foreground)"
+	@echo "  execution          run execution-router API (foreground)"
 	@echo "  orchestrator-once  single orchestrator tick"
 	@echo "  orchestrator-loop  daemon orchestrator loop"
 	@echo "  orchestrator-dry   daemon orchestrator loop (no /open calls)"
@@ -56,6 +58,9 @@ install-contracts:
 	cd contracts && forge install
 
 # ── individual services (foreground) ──────────────────────────────────────────
+
+app:
+	npm run dev
 
 cogito:
 	cd services/cogito && bun --env-file=$(ENV_FILE) run src/index.ts
@@ -85,18 +90,21 @@ $(LOGDIR):
 
 demo: $(PIDDIR) $(LOGDIR)
 	@if [ ! -f $(ENV_FILE) ]; then echo "ERROR: $(ENV_FILE) missing — copy .env.example first"; exit 1; fi
+	@echo "▶ booting app (logs: $(LOGDIR)/app.log) …"
+	@npm run dev > $(LOGDIR)/app.log 2>&1 & echo $$! > $(PIDDIR)/app.pid
 	@echo "▶ booting cogito (logs: $(LOGDIR)/cogito.log) …"
 	@cd services/cogito && bun --env-file=$(ENV_FILE) run src/index.ts > $(LOGDIR)/cogito.log 2>&1 & echo $$! > $(PIDDIR)/cogito.pid
 	@echo "▶ booting signal-gateway (logs: $(LOGDIR)/signal.log) …"
 	@cd services && uv run --env-file $(ENV_FILE) python -m meridian_signal.api > $(LOGDIR)/signal.log 2>&1 & echo $$! > $(PIDDIR)/signal.pid
 	@echo "▶ booting execution-router (logs: $(LOGDIR)/execution.log) …"
 	@cd services && uv run --env-file $(ENV_FILE) python -m execution_router.api > $(LOGDIR)/execution.log 2>&1 & echo $$! > $(PIDDIR)/execution.pid
-	@echo "⏳ waiting 6s for sidecars to bind ports …"
-	@sleep 6
+	@echo "⏳ waiting 8s for the integrated stack to bind ports …"
+	@sleep 8
 	@echo "▶ orchestrator: one tick"
 	@cd services && uv run --env-file $(ENV_FILE) python -m orchestrator once || true
 	@echo
-	@echo "✔ demo running. Dashboard: http://127.0.0.1:5004/"
+	@echo "✔ demo running. Operator terminal: http://127.0.0.1:3000/"
+	@echo "  app:       http://127.0.0.1:3000/"
 	@echo "  cogito:    http://127.0.0.1:5003/health"
 	@echo "  signal:    http://127.0.0.1:5002/health"
 	@echo "  execution: http://127.0.0.1:5004/health"
@@ -125,7 +133,7 @@ status:
 	  echo "  $$(basename $$f .pid): $$pid ($$state)"; \
 	done
 	@echo "── ports ──"
-	@lsof -iTCP:5002,5003,5004 -sTCP:LISTEN -nP 2>/dev/null | tail -n +2 || echo "  (none listening)"
+	@lsof -iTCP:3000,5002,5003,5004 -sTCP:LISTEN -nP 2>/dev/null | tail -n +2 || echo "  (none listening)"
 
 # ── verification ──────────────────────────────────────────────────────────────
 
@@ -161,7 +169,7 @@ preflight:
 # fundBurner → bridge → CLOB → audit. Survives partial failure: any exception
 # is logged but the audit log + dashboard show exactly where it stopped.
 #
-# Sidecars must already be running. Start them with `make demo` first.
+# App and sidecars must already be running. Start them with `make demo` first.
 e2e-real:
 	@if [ ! -f $(ENV_FILE) ]; then echo "ERROR: $(ENV_FILE) missing"; exit 1; fi
 	@echo "▶ preflight (require T4 ready) …"
@@ -173,7 +181,7 @@ e2e-real:
 	  uv run --env-file $(ENV_FILE) python -m orchestrator once
 	@echo
 	@echo "✔ e2e-real complete. Inspect:"
-	@echo "  Dashboard:  http://127.0.0.1:5004/"
+	@echo "  Terminal:   http://127.0.0.1:3000/"
 	@echo "  Positions:  curl -s http://127.0.0.1:5004/api/execution/positions | jq ."
 	@echo "  Audit log:  curl -s 'http://127.0.0.1:5004/api/execution/audit?limit=20' | jq ."
 

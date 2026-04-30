@@ -1,6 +1,6 @@
-# MERIDIAN services
+# MIROSHARK services
 
-Sidecar Python services that wrap the MiroFish backend. Run alongside the docker compose stack — they are NOT part of the upstream image.
+Sidecar Python services that power the unified Miroshark terminal. They run alongside the analysis backend and are not a separate user-facing app.
 
 Layout:
 
@@ -95,7 +95,7 @@ Env (read from `meridian-core/.env`, one level up):
 `GET /health`
 
 ```json
-{"service":"MERIDIAN signal-gateway","status":"ok","phase":"1"}
+{"service":"Miroshark signal gateway","status":"ok","phase":"1"}
 ```
 
 `POST /api/signal/markets/scan` — list active Polymarket markets ranked by 24h volume.
@@ -205,7 +205,7 @@ Calls `markResolved(positionId, encrypted_payout)` then `settle(positionId)`. Bo
 `GET /api/execution/positions/<position_id>` — single record.
 `GET /api/execution/positions` — list.
 
-`GET /` — lightweight operator dashboard (vanilla HTML). Polls `/health` + `/api/execution/positions` every 5s. No build step. Good enough for a demo; opens links to BaseScan for tx hashes.
+`GET /` on the execution router now redirects to the unified Miroshark terminal. The old standalone dashboard is no longer the primary surface.
 
 Graceful degradation:
 * `BURNER_SEED` unset → 500.
@@ -222,7 +222,7 @@ Graceful degradation:
 | 3 ✓ | cogito sidecar pins seed + simulation to 0G Storage (populates `*_hash_0g`) and optionally routes LLM through 0G Compute (`LLM_PROVIDER=0g`). See `cogito/README.md`. Graceful fallback to `null` if cogito is down. |
 | 4a ✓ | `contracts/src/PrivateSettlementHook.sol` — v4 CoFHE pool gate + encrypted treasury → burner → treasury flow. `forge test --via-ir` passes 38/38. |
 | 4b ✓ | `execution_router/` Flask app on :5004. Wires burner derivation → fundBurner (KeeperHub-wrapped) → Polymarket CLOB → markResolved + settle. Falls back to dry-run when hook/CLOB credentials missing. |
-| 5 ✓ | `orchestrator/` (scan → run → open) + operator dashboard served at `:5004/`. |
+| 5 ✓ | `orchestrator/` (scan → run → open) + unified operator terminal on `:3000/`. |
 
 ## DNS fallback note
 
