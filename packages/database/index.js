@@ -37,6 +37,19 @@ const DEFAULT_OPERATOR_STATE = Object.freeze({
     treasuryAddress: null,
     tradingAddress: null,
     treasuryFundingMode: 'unconfigured',
+    agentIdentity: {
+      provider: '0g',
+      registered: false,
+      identityId: '',
+      label: '',
+      identityAddress: '',
+      agentWalletAddress: '',
+      ownerEmail: '',
+      note: '',
+      explorerUrl: '',
+      registeredAt: null,
+      updatedAt: null,
+    },
   },
   automation: {
     openclaw: {

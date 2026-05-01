@@ -459,6 +459,7 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
       const wallet = await createTreasurySmartAccount({
         label: 'Miroshark Treasury',
         recoveryAddress: recoveryAddress.trim() || undefined,
+        agentWalletAddress: config?.agentWalletAddress || undefined,
       })
 
       const persistResponse = await fetch('/api/treasury/modular/activate', {
@@ -524,6 +525,7 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
         credential,
         walletAddress: config.wallet.walletAddress,
         label: 'Miroshark Treasury',
+        agentWalletAddress: config?.agentWalletAddress || undefined,
       })
 
       const sessionResponse = await fetch('/api/treasury/modular/session', {
@@ -605,6 +607,11 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
       {isMainnetProvisioning ? (
         <ResultBanner tone="info">
           Mainnet provisioning is active. This ceremony provisions the Polygon treasury signer and smart account for production treasury control.
+        </ResultBanner>
+      ) : null}
+      {config?.circle?.downgradedToTestnet ? (
+        <ResultBanner tone="info">
+          The configured Circle key is a test client key, so this ceremony is using Polygon Amoy testnet. Use a `LIVE_CLIENT_KEY` to provision a Polygon mainnet treasury.
         </ResultBanner>
       ) : null}
       <div className="msk-note-block">

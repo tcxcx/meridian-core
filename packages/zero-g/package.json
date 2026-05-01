@@ -1,1 +1,10 @@
-{ "name": "@repo/zero-g", "version": "0.0.0", "private": true }
+{
+  "name": "@repo/zero-g",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "dependencies": {
+    "viem": "^2.48.4"
+  }
+}

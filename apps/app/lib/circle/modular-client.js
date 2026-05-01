@@ -75,6 +75,38 @@ function envValue(...names) {
   return ''
 }
 
+function getPublicCircleClientKey() {
+  return (
+    process.env.NEXT_PUBLIC_CIRCLE_MODULAR_CLIENT_KEY ||
+    process.env.NEXT_PUBLIC_CIRCLE_CLIENT_KEY ||
+    ''
+  ).trim()
+}
+
+function getPublicCircleClientUrl() {
+  return (
+    process.env.NEXT_PUBLIC_CIRCLE_MODULAR_CLIENT_URL ||
+    process.env.NEXT_PUBLIC_CIRCLE_CLIENT_URL ||
+    ''
+  ).trim()
+}
+
+function getPublicCircleChainName() {
+  return (
+    process.env.NEXT_PUBLIC_CIRCLE_MODULAR_CHAIN ||
+    (String(process.env.NEXT_PUBLIC_POLYMARKET_CHAIN_ID || process.env.POLYMARKET_CHAIN_ID || '80002') === '137'
+      ? 'Polygon'
+      : 'Polygon_Amoy_Testnet')
+  ).trim()
+}
+
+function resolveEffectiveCircleChainName(clientKey, requestedChainName) {
+  if (String(clientKey || '').startsWith('TEST_CLIENT_KEY:') && requestedChainName === 'Polygon') {
+    return 'Polygon_Amoy_Testnet'
+  }
+  return requestedChainName
+}
+
 function getAddressBookDependencies() {
   return [
     {
@@ -107,10 +139,19 @@ function encodeInstallAddressBook(initialRecipients) {
   })
 }
 
-function resolveAgentWalletRecipients() {
+function resolveAgentWalletRecipients(explicitRecipients = []) {
   const recipients = []
+  for (const item of explicitRecipients) {
+    if (item && String(item).trim()) recipients.push(String(item).trim())
+  }
   const signerKey = envValue('TRADING_WALLET_PRIVATE_KEY', 'GATEWAY_SIGNER_PRIVATE_KEY')
-  if (signerKey) recipients.push(privateKeyToAccount(signerKey).address)
+  if (signerKey) {
+    try {
+      recipients.push(privateKeyToAccount(signerKey).address)
+    } catch {
+      // fall back to explicit recipients when the signer is unavailable client-side
+    }
+  }
   const explicit = envValue('TRADING_WALLET_ADDRESS', 'MIROSHARK_AGENT_WALLET_ADDRESS')
   if (explicit) recipients.push(explicit)
   return [...new Set(recipients.map((item) => String(item).toLowerCase()))]
@@ -150,13 +191,10 @@ async function installAgentWalletRegistry({ account, bundlerClient, recipients }
 }
 
 export function getModularWalletConfig() {
-  const clientKey = envValue('NEXT_PUBLIC_CIRCLE_MODULAR_CLIENT_KEY', 'NEXT_PUBLIC_CIRCLE_CLIENT_KEY')
-  const clientUrl = envValue('NEXT_PUBLIC_CIRCLE_MODULAR_CLIENT_URL', 'NEXT_PUBLIC_CIRCLE_CLIENT_URL')
-  const chainName =
-    envValue('NEXT_PUBLIC_CIRCLE_MODULAR_CHAIN') ||
-    (String(process.env.NEXT_PUBLIC_POLYMARKET_CHAIN_ID || process.env.POLYMARKET_CHAIN_ID || '80002') === '137'
-      ? 'Polygon'
-      : 'Polygon_Amoy_Testnet')
+  const clientKey = getPublicCircleClientKey()
+  const clientUrl = getPublicCircleClientUrl()
+  const requestedChainName = getPublicCircleChainName()
+  const chainName = resolveEffectiveCircleChainName(clientKey, requestedChainName)
 
   const chainConfig = CHAIN_CONFIGS[chainName]
   if (!clientKey || !clientUrl) {
@@ -169,6 +207,7 @@ export function getModularWalletConfig() {
   return {
     clientKey,
     clientUrl,
+    requestedChainName,
     chainName,
     ...chainConfig,
   }
@@ -195,7 +234,7 @@ function getUserOpFeeFloor(chainId, maxFeePerGas, maxPriorityFeePerGas) {
   }
 }
 
-export async function createTreasurySmartAccount({ label, recoveryAddress } = {}) {
+export async function createTreasurySmartAccount({ label, recoveryAddress, agentWalletAddress } = {}) {
   const config = getModularWalletConfig()
   const credential = await registerTreasuryCredential({ label })
   const connected = await connectTreasurySmartAccount({
@@ -203,6 +242,7 @@ export async function createTreasurySmartAccount({ label, recoveryAddress } = {}
     walletAddress: null,
     label,
     recoveryAddress,
+    agentWalletAddress,
   })
 
   return {
@@ -222,7 +262,7 @@ export async function registerTreasuryCredential({ label } = {}) {
   })
 }
 
-export async function connectTreasurySmartAccount({ credential, walletAddress, label, recoveryAddress } = {}) {
+export async function connectTreasurySmartAccount({ credential, walletAddress, label, recoveryAddress, agentWalletAddress } = {}) {
   const config = getModularWalletConfig()
   const modularTransport = toModularTransport(
     `${config.clientUrl}${config.transportSegment}`,
@@ -270,7 +310,9 @@ export async function connectTreasurySmartAccount({ credential, walletAddress, l
   }
 
   const addressMappings = walletAddress ? [] : await registerOwnerAddressMapping(publicClient, account, credential)
-  const registeredRecipients = walletAddress ? [] : resolveAgentWalletRecipients()
+  const registeredRecipients = walletAddress
+    ? []
+    : resolveAgentWalletRecipients(agentWalletAddress ? [agentWalletAddress] : [])
   const { addressBookInstalled, userOpHash } = walletAddress
     ? { addressBookInstalled: false, userOpHash: null }
     : await installAgentWalletRegistry({

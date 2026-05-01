@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation'
 import GraphPanel from '@/components/miroshark/graph-panel'
 import PortfolioPerformance from '@/components/miroshark/portfolio-performance'
 import WalletActionModals from '@/components/miroshark/wallet-action-modals'
+import WalletGatewayDropdown from '@/components/miroshark/wallet-gateway-dropdown'
 import { demoGraphData } from '@/lib/demo-graph'
 import { buildOpportunityGraph, scoreOpportunity } from '@/lib/opportunity-graph'
 
@@ -847,6 +848,11 @@ export default function OperatorTerminal() {
           <div className="brand-sub">single operator terminal for graph-native swarm trading</div>
         </div>
         <div className="status-strip">
+          <WalletGatewayDropdown
+            gatewayBalance={gatewayBalanceView}
+            capitalPlane={capitalPlane}
+            onOpenModal={setActiveCapitalModal}
+          />
           <span className="status-pill">{operatorModeLabel}</span>
           <span className="status-pill">{chainLabel}</span>
           <span className={`status-pill ${signalOnline ? '' : 'warn'}`}>signal {signalOnline ? 'online' : 'offline'}</span>
@@ -964,22 +970,9 @@ export default function OperatorTerminal() {
                 <div className="wallet-token-mark">UNIFIED USDC</div>
               </div>
               <div className="wallet-actions-grid">
-                <button type="button" className="wallet-action-btn" onClick={() => setActiveCapitalModal('deposit')}>
-                  <span className="wallet-action-icon">+</span>
-                  <span>Deposit</span>
-                </button>
-                <button type="button" className="wallet-action-btn" onClick={() => setActiveCapitalModal('send')}>
-                  <span className="wallet-action-icon">→</span>
-                  <span>Send</span>
-                </button>
-                <button type="button" className="wallet-action-btn" onClick={() => setActiveCapitalModal('swap')}>
-                  <span className="wallet-action-icon">⇄</span>
-                  <span>Swap</span>
-                </button>
-                <button type="button" className="wallet-action-btn" onClick={() => setActiveCapitalModal('bridge')}>
-                  <span className="wallet-action-icon">⤴</span>
-                  <span>Bridge</span>
-                </button>
+                <div className="wallet-action-note">
+                  The Sendero-style wallet control plane now lives in the top-right header, including Gateway actions and 0G agent registration.
+                </div>
               </div>
             </div>
             <div className="wallet-balance-grid">

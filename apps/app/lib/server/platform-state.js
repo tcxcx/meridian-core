@@ -95,6 +95,15 @@ export async function synchronizeUserPlatformState(userId, nextState = {}) {
       treasuryAddress: walletTopology.treasury.address,
       tradingAddress: walletTopology.agent.address,
       treasuryFundingMode: walletTopology.treasury.fundingMode,
+      agentIdentity: {
+        ...DEFAULT_OPERATOR_STATE.wallets.agentIdentity,
+        ...(previous.wallets?.agentIdentity || {}),
+        ...(nextState.wallets?.agentIdentity || {}),
+        agentWalletAddress:
+          nextState.wallets?.agentIdentity?.agentWalletAddress ||
+          previous.wallets?.agentIdentity?.agentWalletAddress ||
+          walletTopology.agent.address,
+      },
     },
   })
 }

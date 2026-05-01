@@ -1,7 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 
-const isProtectedPageRoute = createRouteMatcher(['/', '/setup(.*)'])
+const isProtectedPageRoute = createRouteMatcher(['/setup(.*)'])
 const isProtectedApiRoute = createRouteMatcher(['/api/(.*)'])
 const isAuthRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
 
@@ -46,7 +46,7 @@ export function authMiddleware() {
     ),
   )
 
-  return clerkMiddleware(async (auth, request) => {
+  const handler = clerkMiddleware(async (auth, request) => {
     const session = await auth()
     const { userId } = session
     if (userId && isAuthRoute(request)) {
@@ -67,4 +67,15 @@ export function authMiddleware() {
     signUpUrl,
     authorizedParties,
   }))
+
+  return async (request, event) => {
+    try {
+      return await handler(request, event)
+    } catch (error) {
+      if ([...request.nextUrl.searchParams.keys()].some((key) => key.startsWith('__clerk'))) {
+        return NextResponse.redirect(new URL(sanitizeReturnBackUrl(request)))
+      }
+      throw error
+    }
+  }
 }

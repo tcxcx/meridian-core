@@ -156,6 +156,9 @@
     "packages/zero-g": {
       "name": "@repo/zero-g",
       "version": "0.0.0",
+      "dependencies": {
+        "viem": "^2.48.4",
+      },
     },
   },
   "packages": {
@@ -1917,7 +1920,7 @@
 
     "@coral-xyz/anchor/superstruct": ["superstruct@0.15.5", "", {}, "sha512-4AOeU+P5UuE/4nOUkmcQdW5y7i9ndt1cQd/3iUe+LTz3RxESf/W/5lg4B74HbDMMv8PHnPnGCQFH45kBcrQYoQ=="],
 
-    "@miroshark/app/@miroshark/ui": ["@miroshark/ui@file:packages/ui", { "peerDependencies": { "react": "^19", "react-dom": "^19" } }],
+    "@miroshark/app/@miroshark/ui": ["@miroshark/ui@file:packages/ui", { "dependencies": { "unicornstudio-react": "^2.1.9" }, "peerDependencies": { "next": "^16", "react": "^19", "react-dom": "^19" } }],
 
     "@miroshark/app/@repo/auth": ["@repo/auth@file:packages/auth", { "dependencies": { "@clerk/nextjs": "^7.0.1", "@clerk/themes": "^2.4.57", "next-themes": "^0.4.6" } }],
 
@@ -1942,6 +1945,8 @@
     "@miroshark/app/@repo/uniswap": ["@repo/uniswap@file:packages/uniswap", {}],
 
     "@miroshark/app/@repo/zero-g": ["@repo/zero-g@file:packages/zero-g", {}],
+
+    "@miroshark/web/@miroshark/ui": ["@miroshark/ui@file:packages/ui", { "dependencies": { "unicornstudio-react": "^2.1.9" }, "peerDependencies": { "next": "^16", "react": "^19", "react-dom": "^19" } }],
 
     "@miroshark/web/@repo/database": ["@repo/database@file:packages/database", { "dependencies": { "dotenv": "^16.5.0", "drizzle-orm": "^0.44.6", "pg": "^8.16.3" } }],
 
