@@ -1,0 +1,37 @@
+{
+  "name": "@miroshark/app",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "^7.2.9",
+    "@miroshark/ui": "file:../../packages/ui",
+    "@circle-fin/adapter-viem-v2": "^1.8.3",
+    "@circle-fin/app-kit": "^1.4.1",
+    "@circle-fin/modular-wallets-core": "^1.0.13",
+    "@repo/auth": "file:../../packages/auth",
+    "@repo/circle": "file:../../packages/circle",
+    "@repo/collaboration": "file:../../packages/collaboration",
+    "@repo/database": "file:../../packages/database",
+    "@repo/ens": "file:../../packages/ens",
+    "@repo/fhenix": "file:../../packages/fhenix",
+    "@repo/gensyn-axl": "file:../../packages/gensyn-axl",
+    "@repo/keeperhub": "file:../../packages/keeperhub",
+    "@repo/openclaw": "file:../../packages/openclaw",
+    "@repo/polymarket": "file:../../packages/polymarket",
+    "@repo/uniswap": "file:../../packages/uniswap",
+    "@repo/zero-g": "file:../../packages/zero-g",
+    "@simplewebauthn/server": "^13.2.2",
+    "d3": "^7.9.0",
+    "dotenv": "^17.2.3",
+    "next": "^16.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "recharts": "^3.8.1",
+    "viem": "^2.48.4",
+    "webauthn-p256": "^0.0.5"
+  }
+}

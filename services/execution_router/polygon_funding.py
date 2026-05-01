@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from eth_account import Account
 from web3 import Web3
+from web3.middleware.proof_of_authority import ExtraDataToPOAMiddleware
 
 POLYGON_AMOY_USDC = Web3.to_checksum_address("0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582")
 POLYGON_AMOY_PUBLIC_RPC = "https://rpc-amoy.polygon.technology"
@@ -47,6 +48,7 @@ class PolygonTransferResult:
 class PolygonFundingClient:
     def __init__(self, rpc_url: str, private_key: str, token_address: str = str(POLYGON_AMOY_USDC)) -> None:
         self._w3 = Web3(Web3.HTTPProvider(rpc_url))
+        self._w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         self._account = Account.from_key(private_key)
         self._token = self._w3.eth.contract(address=Web3.to_checksum_address(token_address), abi=ERC20_ABI)
         self._decimals = 6
@@ -59,6 +61,11 @@ class PolygonFundingClient:
         holder = Web3.to_checksum_address(address or self._account.address)
         raw = int(self._token.functions.balanceOf(holder).call())
         return float(Decimal(raw) / (Decimal(10) ** self._decimals))
+
+    def native_balance(self, address: str | None = None) -> float:
+        holder = Web3.to_checksum_address(address or self._account.address)
+        raw = int(self._w3.eth.get_balance(holder))
+        return float(Decimal(raw) / (Decimal(10) ** 18))
 
     def transfer_usdc(self, recipient: str, amount_usdc: float) -> PolygonTransferResult:
         recipient_ck = Web3.to_checksum_address(recipient)
@@ -106,6 +113,8 @@ def from_env() -> PolygonFundingClient | None:
         try:
             client = PolygonFundingClient(rpc_url=rpc, private_key=private_key)
             _ = client._w3.eth.chain_id
+            _ = client.native_balance()
+            _ = client.balance_usdc()
             return client
         except Exception:
             continue

@@ -22,7 +22,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal
 
-PositionStatus = Literal["funding", "open", "resolving", "settled", "failed"]
+PositionStatus = Literal["funding", "open", "closing", "exited", "resolving", "settled", "failed"]
 
 
 @dataclass
@@ -44,6 +44,9 @@ class PositionRecord:
     status: PositionStatus = "funding"
     fund_tx: str | None = None
     clob_order_id: str | None = None
+    exit_order_id: str | None = None
+    exit_shares: float | None = None
+    exit_usdc: float | None = None
     resolve_tx: str | None = None
     settle_tx: str | None = None
     payout_usdc: float | None = None
@@ -80,6 +83,9 @@ class PositionRecord:
             "status": self.status,
             "fund_tx": self.fund_tx,
             "clob_order_id": self.clob_order_id,
+            "exit_order_id": self.exit_order_id,
+            "exit_shares": self.exit_shares,
+            "exit_usdc": self.exit_usdc,
             "resolve_tx": self.resolve_tx,
             "settle_tx": self.settle_tx,
             "payout_usdc": self.payout_usdc,

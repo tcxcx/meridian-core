@@ -17,6 +17,8 @@ class MarketSummary:
     question: str
     description: str
     end_date_iso: str | None
+    active: bool
+    closed: bool
     volume_usd: float
     liquidity_usd: float
     outcomes: list[str]
@@ -51,6 +53,8 @@ def _parse_market(raw: dict) -> MarketSummary | None:
         question=str(raw.get("question") or ""),
         description=str(raw.get("description") or "")[:2000],
         end_date_iso=raw.get("endDate"),
+        active=bool(raw.get("active")),
+        closed=bool(raw.get("closed")),
         volume_usd=_to_float(raw.get("volume")),
         liquidity_usd=_to_float(raw.get("liquidity")),
         outcomes=[str(o) for o in outcomes],
@@ -64,16 +68,18 @@ def discover_markets(
     limit: int = 20,
     min_liquidity_usd: float = 5000.0,
     closed: bool = False,
+    active: bool | None = True,
     order: str = "volume24hr",
 ) -> list[MarketSummary]:
     """List active Polymarket markets ranked by 24h volume by default."""
     params = {
         "limit": limit * 3,  # over-fetch, filter, then truncate
-        "active": "true",
         "closed": str(closed).lower(),
         "order": order,
         "ascending": "false",
     }
+    if active is not None:
+        params["active"] = str(active).lower()
     with httpx.Client(timeout=15.0) as client:
         resp = client.get(f"{GAMMA_HOST}/markets", params=params)
         resp.raise_for_status()

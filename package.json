@@ -1,38 +1,52 @@
 {
-  "name": "miroshark",
-  "version": "0.2.0",
+  "name": "miroshark-platform",
+  "version": "0.3.0",
   "private": true,
-  "description": "Miroshark - unified operator terminal for graph-native swarm trading",
+  "description": "MiroShark platform monorepo with authenticated operator app, backend services, and sponsor integrations",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "setup": "npm install",
+    "setup": "bun install",
     "setup:backend": "cd backend && uv sync",
-    "setup:all": "npm run setup && npm run setup:backend",
-    "dev": "next dev",
-    "dev:full": "concurrently --kill-others -n \"backend,signal,execution,app\" -c \"green,magenta,blue,cyan\" \"npm run backend\" \"npm run signal\" \"npm run execution\" \"npm run dev\"",
+    "setup:all": "bun run setup && bun run setup:backend",
+    "dev": "bunx turbo dev --filter=@miroshark/app",
+    "dev:app": "bun run --cwd apps/app dev",
+    "dev:web": "bun run --cwd apps/web dev",
+    "dev:api": "bun run --cwd apps/api dev",
+    "dev:storybook": "bun run --cwd apps/storybook dev",
+    "dev:complete": "bash scripts/dev-complete.sh",
+    "dev:full": "bun run dev:complete",
     "backend": "cd backend && uv run python run.py",
     "signal": "cd services && uv run --env-file ../.env python -m meridian_signal.api",
     "execution": "cd services && uv run --env-file ../.env python -m execution_router.api",
     "orchestrator": "cd services && uv run --env-file ../.env python -m orchestrator",
-    "build": "next build",
-    "start": "next start"
-  },
-  "dependencies": {
-    "@circle-fin/adapter-viem-v2": "^1.8.3",
-    "@circle-fin/app-kit": "^1.4.1",
-    "@circle-fin/modular-wallets-core": "^1.0.13",
-    "@simplewebauthn/server": "^13.2.2",
-    "d3": "^7.9.0",
-    "next": "^16.0.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "recharts": "^3.8.1",
-    "viem": "^2.48.4"
+    "build": "bunx turbo run build",
+    "build:app": "bun run --cwd apps/app build",
+    "build:web": "bun run --cwd apps/web build",
+    "build:api": "bun run --cwd apps/api build",
+    "build:storybook": "bun run --cwd apps/storybook build",
+    "start:app": "bun run --cwd apps/app start",
+    "start:web": "bun run --cwd apps/web start",
+    "start:api": "bun run --cwd apps/api start",
+    "vercel:link:app": "npx vercel link --cwd apps/app",
+    "vercel:link:web": "npx vercel link --cwd apps/web",
+    "vercel:link:api": "npx vercel link --cwd apps/api",
+    "vercel:pull:app": "npx vercel pull --cwd apps/app",
+    "vercel:pull:web": "npx vercel pull --cwd apps/web",
+    "vercel:pull:api": "npx vercel pull --cwd apps/api",
+    "vercel:dev:app": "npx vercel dev --cwd apps/app",
+    "vercel:dev:web": "npx vercel dev --cwd apps/web",
+    "vercel:dev:api": "npx vercel dev --cwd apps/api"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "turbo": "^2.8.14"
   },
   "engines": {
     "node": ">=20.9.0"
   },
+  "packageManager": "bun@1.3.10",
   "license": "AGPL-3.0"
 }

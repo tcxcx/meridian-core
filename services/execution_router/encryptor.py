@@ -70,7 +70,10 @@ class CogitoEncryptor:
         self._client = httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=timeout)
 
     def encrypt_uint128(self, value: int, sender: str) -> SealedInput:
-        r = self._client.post("/fhe/encrypt", json={"value": str(value), "sender": sender, "utype": 8})
+        # Do not hard-code the incoming utype literal. cofhejs owns that enum
+        # and can change its numeric value across versions; the sidecar returns
+        # the canonical `utype` in the response.
+        r = self._client.post("/fhe/encrypt", json={"value": str(value), "sender": sender})
         r.raise_for_status()
         data = r.json()
         return SealedInput(

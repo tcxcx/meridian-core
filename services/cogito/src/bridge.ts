@@ -46,6 +46,7 @@ import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import {
   GATEWAY_TESTNET_API,
   chainByKey,
+  TESTNET_CHAINS,
   type GatewayChain,
 } from "./gatewayChains.js";
 
@@ -171,6 +172,11 @@ interface StepRecord {
 interface BridgeRoutes {
   router: Hono;
   ready: boolean;
+  status: () => Promise<{
+    treasuryBalance: number | null;
+    balances: Array<{ domain: number; balance: number }>;
+    depositor: string | null;
+  }>;
 }
 
 const POLL_INTERVAL_MS = Number(process.env.GATEWAY_POLL_INTERVAL_MS ?? 4_000);
@@ -214,7 +220,23 @@ export function createBridgeRoutes(): BridgeRoutes {
     }
   });
 
-  return { router, ready };
+  return {
+    router,
+    ready,
+    status: async () => {
+      if (!treasuryKey) {
+        return { treasuryBalance: null, balances: [], depositor: null };
+      }
+      const depositor = privateKeyToAccount(ensure0xPrefixed(treasuryKey) as Hex).address;
+      try {
+        const balances = await fetchGatewayBalances(depositor);
+        const total = balances.reduce((sum, item) => sum + item.balance, 0);
+        return { treasuryBalance: total, balances, depositor };
+      } catch {
+        return { treasuryBalance: null, balances: [], depositor };
+      }
+    },
+  };
 }
 
 // ── Deposit: approve + deposit USDC into the source chain's GatewayWallet.
@@ -503,6 +525,29 @@ function explorerUrl(chain: GatewayChain, tx: string): string | null {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchGatewayBalances(depositor: Hex): Promise<Array<{ domain: number; balance: number }>> {
+  const body = {
+    token: "USDC",
+    sources: Object.values(TESTNET_CHAINS).map((chain) => ({
+      domain: chain.domain,
+      depositor,
+    })),
+  };
+  const resp = await fetch(`${GATEWAY_TESTNET_API}/v1/balances`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    throw new Error(`gateway balances ${resp.status}: ${await resp.text()}`);
+  }
+  const payload: any = await resp.json();
+  return (payload?.balances ?? []).map((item: any) => ({
+    domain: Number(item.domain),
+    balance: Number(item.balance ?? 0),
+  }));
 }
 
 // Suppress unused-import lint while keeping the minter ABI exported in spirit

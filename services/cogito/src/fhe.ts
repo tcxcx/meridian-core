@@ -1,30 +1,28 @@
 /**
- * /fhe/encrypt — wraps cofhejs to mint real `InEuint128` sealed inputs.
+ * /fhe/encrypt — mints real `InEuint128` sealed inputs for the settlement hook.
  *
- * The Python execution-router can't call cofhejs directly (it's a TS/WASM lib),
- * so it POSTs `{ value, sender, utype }` here and gets back a JSON shape that
- * `services/execution_router/encryptor.py::SealedInput` parses 1:1 into the
- * Solidity `InEuint128` tuple consumed by `PrivateSettlementHook.fundBurner`
- * and `markResolved`.
+ * This route used to rely on the older `cofhejs` singleton path. Fhenix's
+ * current supported server-side flow is `@cofhe/sdk`, which exposes:
  *
- * cofhejs is initialized once with an ethers v6 wallet on Arbitrum Sepolia
- * (Fhenix CoFHE testnet). The wallet address is the only valid `sender` for
- * the resulting sealed input — CoFHE binds the input to the signer that
- * proved it. We accept the caller's `sender` field but require it match the
- * configured FHE signer; otherwise the on-chain hook would revert.
+ *   createCofheConfig({ supportedChains: [arbSepolia] })
+ *   createCofheClient(config)
+ *   client.connect(publicClient, walletClient)
+ *   client.encryptInputs([Encryptable.uint128(value)]).execute()
  *
- * Wallet env priority:
- *   FHE_PRIVATE_KEY → TREASURY_PRIVATE_KEY (the latter already gates /bridge).
- * RPC env priority:
- *   FHE_RPC_URL → ARB_SEPOLIA_RPC_URL → ARBITRUM_SEPOLIA_RPC_URL → ZG_RPC_URL.
- *
- * Returns 503 when un-configured so the Python side stays on DryRunEncryptor.
+ * The Python execution-router POSTs `{ value, sender }` here and receives a
+ * JSON shape that `encryptor.py::SealedInput` parses 1:1 into Solidity's
+ * `InEuint128` tuple consumed by `PrivateSettlementHook.fundBurner` and
+ * `markResolved`.
  */
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import { ethers } from "ethers";
-import { cofhejs, Encryptable, FheTypes } from "cofhejs/node";
+import { createCofheClient, createCofheConfig } from "@cofhe/sdk/node";
+import { arbSepolia } from "@cofhe/sdk/chains";
+import { Encryptable, FheTypes } from "@cofhe/sdk";
+import { createPublicClient, createWalletClient, http } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { arbitrumSepolia } from "viem/chains";
 
 const FheBody = z.object({
   // Decimal uint128 string. The Python side serializes ints as `str(value)`.
@@ -39,10 +37,16 @@ const FheBody = z.object({
 
 interface FheRoutes {
   router: Hono;
-  /** True when an FHE signer + RPC are configured AND cofhejs init succeeded. */
+  /** True when an FHE signer + RPC are configured. */
   ready: boolean;
   /** Address of the cofhejs signer, or null when offline. */
   signer: string | null;
+  status: () => {
+    configured: boolean;
+    live: boolean;
+    engine: string;
+    lastError: string | null;
+  };
 }
 
 export function createFheRoutes(): FheRoutes {
@@ -61,32 +65,60 @@ export function createFheRoutes(): FheRoutes {
         message: "fhe not configured (need FHE_RPC_URL/ARB_SEPOLIA_RPC_URL + FHE_PRIVATE_KEY/TREASURY_PRIVATE_KEY)",
       });
     });
-    return { router, ready: false, signer: null };
+    return {
+      router,
+      ready: false,
+      signer: null,
+      status: () => ({ configured: false, live: false, engine: "@cofhe/sdk", lastError: "not configured" }),
+    };
   }
 
   const privateKey = (rawKey.startsWith("0x") ? rawKey : `0x${rawKey}`) as `0x${string}`;
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
-  const wallet = new ethers.Wallet(privateKey, provider);
-  const signerAddress = wallet.address;
+  const account = privateKeyToAccount(privateKey);
+  const transport = http(rpcUrl);
+  const publicClient = createPublicClient({ chain: arbitrumSepolia, transport });
+  const walletClient = createWalletClient({ chain: arbitrumSepolia, transport, account });
+  const signerAddress = account.address;
+  let lastError: string | null = null;
+  let live = false;
+  const config = createCofheConfig({ supportedChains: [arbSepolia] });
+  const client = createCofheClient(config);
 
-  // cofhejs is a singleton zustand store; init lazily on first request and
-  // cache the promise so concurrent calls share one init.
+  // Connect lazily on first request and share the promise across concurrent calls.
   let initPromise: Promise<void> | null = null;
-  async function ensureInitialized(): Promise<void> {
+  async function ensureConnected(): Promise<void> {
     if (initPromise) return initPromise;
     initPromise = (async () => {
-      const result = await cofhejs.initializeWithEthers({
-        ethersProvider: provider,
-        ethersSigner: wallet,
-        environment: "TESTNET",
-      });
-      if (!result.success) {
+      try {
+        await client.connect(publicClient, walletClient);
+      } catch (error) {
         initPromise = null; // allow retry on next call
-        throw new HTTPException(500, { message: `cofhejs init failed: ${result.error}` });
+        live = false;
+        lastError = String(error);
+        throw new HTTPException(500, { message: `cofhe sdk connect failed: ${error}` });
       }
+      lastError = null;
     })();
     return initPromise;
   }
+
+  async function warmup(): Promise<void> {
+    try {
+      await ensureConnected();
+      const probe = await client.encryptInputs([Encryptable.uint128(1n)]).execute();
+      if (!probe[0]) {
+        throw new Error("cofhe sdk warmup returned an empty encryption result");
+      }
+      live = true;
+      lastError = null;
+    } catch (error) {
+      live = false;
+      lastError = String(error);
+    }
+  }
+
+  // Warm the route once on boot so /health reflects actual encrypt readiness.
+  void warmup();
 
   router.post("/encrypt", async (c) => {
     const parsed = FheBody.safeParse(await c.req.json().catch(() => null));
@@ -101,28 +133,38 @@ export function createFheRoutes(): FheRoutes {
       });
     }
 
-    await ensureInitialized();
+    await ensureConnected();
 
-    const item = Encryptable.uint128(BigInt(value));
-    const encrypted =
-      security_zone !== undefined
-        ? await cofhejs.encrypt([item], security_zone)
-        : await cofhejs.encrypt([item]);
+    try {
+      const item =
+        security_zone !== undefined
+          ? Encryptable.uint128(BigInt(value), security_zone)
+          : Encryptable.uint128(BigInt(value));
+      const encrypted = await client.encryptInputs([item]).execute();
+      const sealed = encrypted[0];
+      if (!sealed) {
+        throw new Error("cofhe sdk returned an empty encryption result");
+      }
+      live = true;
+      lastError = null;
 
-    if (!encrypted.success) {
-      throw new HTTPException(502, { message: `cofhejs encrypt failed: ${encrypted.error}` });
+      return c.json({
+        ctHash: "0x" + sealed.ctHash.toString(16),
+        securityZone: sealed.securityZone,
+        utype: sealed.utype,
+        signature: sealed.signature,
+      });
+    } catch (error) {
+      live = false;
+      lastError = String(error);
+      throw new HTTPException(502, { message: `cofhe sdk encrypt failed: ${error}` });
     }
-
-    const sealed = encrypted.data[0];
-    return c.json({
-      // ctHash is a bigint — serialize as 0x-prefixed hex so the Python
-      // SealedInput parser (which calls `int(x, 0)`) round-trips losslessly.
-      ctHash: "0x" + sealed.ctHash.toString(16),
-      securityZone: sealed.securityZone,
-      utype: sealed.utype,
-      signature: sealed.signature,
-    });
   });
 
-  return { router, ready: true, signer: signerAddress };
+  return {
+    router,
+    ready: true,
+    signer: signerAddress,
+    status: () => ({ configured: true, live, engine: "@cofhe/sdk", lastError }),
+  };
 }

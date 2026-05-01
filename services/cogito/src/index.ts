@@ -143,29 +143,34 @@ app.use("*", bodyLimit({ maxSize: MAX_BODY_BYTES, onError: () => {
 
 // ── routes ────────────────────────────────────────────────────────────────────
 
-app.get("/health", (c) => c.json({
-  service: "cogito",
-  status: "ok",
-  signer: zg?.address ?? null,
-  rpc: process.env.ZG_RPC_URL,
-  indexer: process.env.ZG_INDEXER_URL,
-  capabilities: ["storage", "compute", "bridge", "fhe"],
-  storage: {
-    ok: storageReady,
+app.get("/health", async (c) => {
+  const bridgeStatus = await bridgeRoutes.status();
+  return c.json({
+    service: "cogito",
+    status: "ok",
     signer: zg?.address ?? null,
-  },
-  compute: {
-    ok: computeReady,
-    signer: compute?.address ?? null,
-  },
-  bridge: { ready: bridgeRoutes.ready },
-  gateway: {
-    ready: bridgeRoutes.ready,
-    treasuryBalance: 0,
-  },
-  fhe: { ready: fheRoutes.ready, signer: fheRoutes.signer },
-  models: Object.keys(TESTNET_PROVIDERS),
-}));
+    rpc: process.env.ZG_RPC_URL,
+    indexer: process.env.ZG_INDEXER_URL,
+    capabilities: ["storage", "compute", "bridge", "fhe"],
+    storage: {
+      ok: storageReady,
+      signer: zg?.address ?? null,
+    },
+    compute: {
+      ok: computeReady,
+      signer: compute?.address ?? null,
+    },
+    bridge: { ready: bridgeRoutes.ready },
+    gateway: {
+      ready: bridgeRoutes.ready,
+      treasuryBalance: bridgeStatus.treasuryBalance,
+      balances: bridgeStatus.balances,
+      depositor: bridgeStatus.depositor,
+    },
+    fhe: { ready: fheRoutes.ready, signer: fheRoutes.signer, ...fheRoutes.status() },
+    models: Object.keys(TESTNET_PROVIDERS),
+  });
+});
 
 app.route("/bridge", bridgeRoutes.router);
 app.route("/fhe", fheRoutes.router);

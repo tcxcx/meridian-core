@@ -1,0 +1,8 @@
+{
+  "name": "@repo/openclaw",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@repo/database": "file:../database"
+  }
+}

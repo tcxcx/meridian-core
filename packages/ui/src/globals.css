@@ -1,0 +1,400 @@
+:root {
+  --ms-blue: #0000ff;
+  --ms-blue-soft: #eef1ff;
+  --ms-blue-softer: #f6f7ff;
+  --ms-ink: #050505;
+  --ms-ink-soft: #1b1f2b;
+  --ms-graphite: #8f8f98;
+  --ms-graphite-strong: #5a5f70;
+  --ms-mist: #cfcfd7;
+  --ms-paper: #ffffff;
+  --ms-paper-soft: #f3f3f7;
+  --ms-gridline: rgba(0, 0, 255, 0.025);
+  --ms-success: #067a1f;
+  --ms-danger: #c8102e;
+  --ms-warning: #b56a00;
+  --ms-on-blue: #ffffff;
+  --ms-font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --ms-font-sans: "Space Grotesk", "JetBrains Mono", sans-serif;
+}
+
+.ms-scene-shell {
+  position: relative;
+  min-height: 100vh;
+  overflow: clip;
+  background:
+    radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.78), transparent 30%),
+    radial-gradient(circle at 86% 10%, rgba(0, 0, 255, 0.1), transparent 28%),
+    linear-gradient(180deg, rgba(236, 240, 255, 0.94) 0%, rgba(255, 255, 255, 0.9) 100%);
+}
+
+.ms-scene-fixed {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ms-scene-canvas,
+.ms-scene-mesh,
+.ms-scene-grid {
+  position: absolute;
+  inset: 0;
+}
+
+.ms-scene-canvas {
+  opacity: 1;
+  transform: scale(1.02);
+  filter: saturate(1.04) contrast(1.02);
+}
+
+.ms-scene-mesh {
+  background:
+    radial-gradient(circle at 16% 18%, rgba(255, 255, 255, 0.78), transparent 22%),
+    radial-gradient(circle at 82% 14%, rgba(0, 0, 255, 0.12), transparent 28%),
+    radial-gradient(circle at 52% 72%, rgba(0, 0, 255, 0.05), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.26) 0%, rgba(233, 238, 255, 0.76) 100%);
+}
+
+.ms-scene-grid {
+  background-image:
+    linear-gradient(to right, rgba(0, 0, 255, 0.065) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 0, 255, 0.05) 1px, transparent 1px);
+  background-size: 96px 96px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.45));
+  opacity: 0.72;
+}
+
+.ms-scene-content {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
+[data-variant='setup'] .ms-scene-mesh {
+  background:
+    radial-gradient(circle at 14% 18%, rgba(255, 255, 255, 0.82), transparent 20%),
+    radial-gradient(circle at 86% 14%, rgba(0, 0, 255, 0.16), transparent 26%),
+    radial-gradient(circle at 40% 80%, rgba(0, 0, 255, 0.06), transparent 28%),
+    linear-gradient(180deg, rgba(252, 252, 255, 0.5) 0%, rgba(234, 240, 255, 0.86) 100%);
+}
+
+[data-variant='marketing'] .ms-scene-grid {
+  background-size: 128px 128px;
+  opacity: 0.64;
+}
+
+[data-variant='marketing'] .ms-scene-mesh {
+  background:
+    radial-gradient(circle at 12% 16%, rgba(255, 255, 255, 0.82), transparent 20%),
+    radial-gradient(circle at 84% 12%, rgba(0, 0, 255, 0.2), transparent 26%),
+    radial-gradient(circle at 76% 74%, rgba(0, 0, 255, 0.08), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(226, 233, 255, 0.74) 100%);
+}
+
+.ms-shell {
+  min-height: 100vh;
+  background: var(--ms-paper);
+  color: var(--ms-ink);
+  font-family: var(--ms-font-mono);
+}
+
+.ms-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  min-height: 28px;
+  padding: 0 10px;
+  background: var(--ms-blue);
+  color: var(--ms-on-blue);
+  letter-spacing: 0.06em;
+}
+
+.ms-brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ms-brand-mark {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.ms-brand-sub {
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+.ms-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.ms-status-pill {
+  padding: 4px 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.25);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.ms-status-pill.is-warn {
+  color: #ffe2b7;
+}
+
+.ms-grid {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  background: repeating-linear-gradient(0deg, transparent 0 23px, var(--ms-gridline) 23px 24px);
+}
+
+.ms-rail,
+.ms-stage {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ms-card {
+  border: 1px solid var(--ms-blue);
+  background: var(--ms-paper);
+  padding: 0 12px 12px;
+}
+
+.ms-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 24px;
+  margin: 0 -12px 12px;
+  padding: 0 12px;
+  background: var(--ms-blue);
+  color: var(--ms-on-blue);
+}
+
+.ms-card-head-l {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ms-card-head-r,
+.ms-card-eyebrow,
+.ms-chip {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.ms-chip {
+  font-weight: 700;
+}
+
+.ms-card-title {
+  font-family: var(--ms-font-sans);
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.ms-card-copy,
+.ms-summary-value,
+.ms-progress-description,
+.ms-note,
+.ms-metric-row {
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.ms-metric-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ms-metric-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px dotted var(--ms-mist);
+  padding-bottom: 6px;
+}
+
+.ms-metric-row dt {
+  color: var(--ms-graphite);
+}
+
+.ms-metric-row dd {
+  margin: 0;
+  color: var(--ms-blue);
+  font-weight: 700;
+  text-align: right;
+}
+
+.ms-summary-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ms-summary-card,
+.ms-note,
+.ms-progress-link {
+  border: 1px solid var(--ms-blue);
+  background: var(--ms-paper);
+}
+
+.ms-summary-card,
+.ms-note,
+.ms-progress-link {
+  padding: 12px;
+}
+
+.ms-summary-label,
+.ms-progress-state {
+  font-size: 10px;
+  color: var(--ms-graphite);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.ms-summary-value {
+  margin-top: 8px;
+  color: var(--ms-blue);
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.ms-note.is-success {
+  border-color: var(--ms-success);
+  color: var(--ms-success);
+}
+
+.ms-note.is-danger {
+  border-color: var(--ms-danger);
+  color: var(--ms-danger);
+}
+
+.ms-progress-track {
+  height: 10px;
+  margin: 12px 0;
+  border: 1px solid var(--ms-blue);
+  background: var(--ms-paper);
+}
+
+.ms-progress-fill {
+  height: 100%;
+  background: var(--ms-blue);
+}
+
+.ms-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ms-progress-link {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  text-decoration: none;
+  color: inherit;
+}
+
+.ms-progress-link:hover,
+.ms-progress-link.is-current {
+  background: var(--ms-blue-soft);
+}
+
+.ms-progress-link.is-complete {
+  border-color: var(--ms-success);
+}
+
+.ms-progress-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  border: 1px solid var(--ms-blue);
+  color: var(--ms-blue);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ms-progress-link.is-complete .ms-progress-index {
+  color: var(--ms-success);
+  border-color: var(--ms-success);
+}
+
+.ms-progress-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ms-progress-body strong {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ms-blue);
+}
+
+.ms-progress-description {
+  color: var(--ms-ink-soft);
+}
+
+.ms-button-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ms-btn-primary,
+.ms-btn-secondary {
+  min-height: 32px;
+  border: 1px solid var(--ms-blue);
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  font-family: var(--ms-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ms-btn-primary {
+  background: var(--ms-blue);
+  color: var(--ms-on-blue);
+}
+
+.ms-btn-secondary {
+  background: var(--ms-paper);
+  color: var(--ms-blue);
+}
+
+.ms-demo-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .ms-grid,
+  .ms-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}

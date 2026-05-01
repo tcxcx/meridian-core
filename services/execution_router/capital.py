@@ -46,6 +46,7 @@ def build_capital_snapshot(
     positions: Iterable[PositionRecord],
     cogito_health: dict | None,
     direct_polygon_balance_usdc: float | None = None,
+    direct_polygon_native_balance: float | None = None,
     keeperhub_ready: bool,
     openclaw_enabled: bool,
     openclaw_session: bool,
@@ -53,8 +54,9 @@ def build_capital_snapshot(
     rows = list(positions)
     gateway_balance = _d((cogito_health or {}).get("gateway", {}).get("treasuryBalance"))
     direct_polygon_balance = _q6(_d(direct_polygon_balance_usdc))
+    direct_polygon_native = _q6(_d(direct_polygon_native_balance))
 
-    open_positions = [row for row in rows if row.status not in {"settled", "failed"}]
+    open_positions = [row for row in rows if row.status not in {"settled", "failed", "exited"}]
     resolving_positions = [row for row in rows if row.status == "resolving"]
     staged_positions = [
         row for row in rows
@@ -146,11 +148,17 @@ def build_capital_snapshot(
         int(os.environ.get("POLYMARKET_CHAIN_ID", "137") or "137") == 80002
     )
     bridge_ready = bool((cogito_health or {}).get("bridge", {}).get("ready"))
+    gateway_seeded = gateway_balance > 0
     hook_ready = bool(os.environ.get("MERIDIAN_HOOK_ADDRESS")) and bool(
         os.environ.get("ARB_SEPOLIA_RPC_URL")
         or os.environ.get("ARBITRUM_SEPOLIA_RPC_URL")
         or os.environ.get("BASE_SEPOLIA_RPC_URL")
         or os.environ.get("RPC_URL")
+    )
+    polygon_direct_ready = (
+        treasury_funding_mode in {"polygon-direct", "polygon-modular"}
+        and direct_polygon_balance > 0
+        and direct_polygon_native > 0
     )
 
     def action_state(ready: bool) -> str:
@@ -200,6 +208,7 @@ def build_capital_snapshot(
             ),
             "gateway_balance_usdc": _f6(gateway_balance),
             "direct_polygon_balance_usdc": _f6(direct_polygon_balance),
+            "direct_polygon_native_balance": _f6(direct_polygon_native),
             "reserve_target_usdc": _f6(treasury_reserve_target),
             "passkey_ready": passkey_client_ready,
             "multisig_ready": multisig_ready,
@@ -234,6 +243,7 @@ def build_capital_snapshot(
             "available_to_deploy_usdc": _f6(available_to_deploy),
             "at_risk_usdc": _f6(deployed_at_risk),
             "direct_polygon_balance_usdc": _f6(direct_polygon_balance),
+            "direct_polygon_native_balance": _f6(direct_polygon_native),
             "replenish_tranche_usdc": _f6(replenish_tranche),
             "replenish_needed": replenish_needed,
             "execution_path": "KeeperHub nanopayments + OpenClaw operator loop",
@@ -251,6 +261,7 @@ def build_capital_snapshot(
             "per_position_max_pct": float(PER_POSITION_MAX_PCT),
             "per_position_min_usdc": _f6(per_position_min),
             "per_position_max_usdc": _f6(per_position_max),
+            "polygon_direct_ready": polygon_direct_ready,
             "profit_distribution": (
                 "OpenClaw resolves positions, KeeperHub executes money movement, "
                 "profits sweep back into treasury."
@@ -267,7 +278,9 @@ def build_capital_snapshot(
                 "balance_usdc": _f6(spendable_now),
                 "detail": (
                     "Direct Polygon Amoy USDC deployable for Polymarket positions."
-                    if treasury_funding_mode in {"polygon-direct", "polygon-modular"}
+                    if polygon_direct_ready
+                    else "Polygon USDC is present but native gas is missing for direct deployment."
+                    if treasury_funding_mode in {"polygon-direct", "polygon-modular"} and direct_polygon_balance > 0
                     else "Gateway-funded deployment budget for Polymarket positions."
                 ),
             },
@@ -277,6 +290,7 @@ def build_capital_snapshot(
                 "domain": None,
                 "role": "canonical donor source",
                 "balance_usdc": _f6(direct_polygon_balance if treasury_funding_mode in {"polygon-direct", "polygon-modular"} else Decimal("0")),
+                "native_gas_balance": _f6(direct_polygon_native if treasury_funding_mode in {"polygon-direct", "polygon-modular"} else Decimal("0")),
                 "detail": (
                     "Treasury funding should originate from the Polygon-side Miroshark treasury, "
                     "not the legacy Arc Circle wallet."
@@ -295,14 +309,30 @@ def build_capital_snapshot(
             {
                 "key": "replenish",
                 "label": "Replenish trading wallet",
-                "state": action_state(bridge_ready and gateway_balance > 0),
-                "detail": "Move a fresh 10% tranche from treasury into the Polygon deployment budget.",
+                "state": action_state(bridge_ready and gateway_seeded),
+                "detail": (
+                    "Move a fresh 10% tranche from treasury into the Polygon deployment budget."
+                    if bridge_ready and gateway_seeded
+                    else "Circle Gateway is not seeded yet, so replenishment must wait for treasury funding on Arbitrum Sepolia."
+                ),
             },
             {
                 "key": "deploy",
                 "label": "Deploy position",
-                "state": action_state(polymarket_ready and keeperhub_ready and available_to_deploy > 0),
-                "detail": "Use 1–5% of the trading wallet for a new Polymarket position.",
+                "state": action_state(
+                    polymarket_ready
+                    and keeperhub_ready
+                    and available_to_deploy > 0
+                    and (
+                        polygon_direct_ready
+                        or (bridge_ready and gateway_seeded)
+                    )
+                ),
+                "detail": (
+                    "Use 1–5% of the trading wallet for a new Polymarket position."
+                    if polygon_direct_ready or (bridge_ready and gateway_seeded)
+                    else "USDC is available, but Polygon Amoy native gas is missing and Circle Gateway is not yet seeded."
+                ),
             },
             {
                 "key": "nanopay",

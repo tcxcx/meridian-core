@@ -13,11 +13,13 @@ import logging
 import os
 from dataclasses import dataclass
 from hashlib import sha256
+from decimal import Decimal
 
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import ApiCreds, MarketOrderArgs, OrderType
+from py_clob_client.clob_types import ApiCreds, AssetType, BalanceAllowanceParams, MarketOrderArgs, OrderType
 from py_clob_client.constants import POLYGON
 from py_clob_client.order_builder.constants import BUY, SELL
+from web3 import Web3
 
 log = logging.getLogger("meridian.execution.clob")
 
@@ -29,6 +31,14 @@ class ClobOrderResult:
     order_id: str
     status: str  # "submitted" | "dry_run" | "error"
     raw: dict | None = None
+
+
+@dataclass(frozen=True)
+class BurnerBalanceSnapshot:
+    shares: float
+    usdc_before: float
+    usdc_after: float
+    exit_usdc: float
 
 
 def _synthetic_order_id(burner: str, token_id: str, side: str, amount: float) -> str:
@@ -53,6 +63,14 @@ class ClobSubmitter:
             self._creds_ok = False
         else:
             self._creds_ok = True
+        self._conditional = self._client.get_conditional_address()
+        self._collateral = self._client.get_collateral_address()
+        self._rpc = (
+            os.environ.get("POLYGON_AMOY_RPC_URL")
+            or os.environ.get("POLYGON_RPC_URL")
+            or "https://rpc-amoy.polygon.technology"
+        )
+        self._w3 = Web3(Web3.HTTPProvider(self._rpc))
 
     @property
     def creds_ok(self) -> bool:
@@ -96,6 +114,48 @@ class ClobSubmitter:
                 status="dry_run",
             )
 
+    def get_share_balance(self, token_id: str) -> float:
+        abi = [{
+            "type": "function",
+            "name": "balanceOf",
+            "stateMutability": "view",
+            "inputs": [
+                {"name": "account", "type": "address"},
+                {"name": "id", "type": "uint256"},
+            ],
+            "outputs": [{"name": "", "type": "uint256"}],
+        }]
+        contract = self._w3.eth.contract(address=Web3.to_checksum_address(self._conditional), abi=abi)
+        raw = int(contract.functions.balanceOf(
+            Web3.to_checksum_address(self._client.get_address()),
+            int(token_id),
+        ).call())
+        return float(Decimal(raw) / Decimal(10**6))
+
+    def get_usdc_balance(self) -> float:
+        if self._creds_ok:
+            try:
+                payload = self._client.get_balance_allowance(
+                    BalanceAllowanceParams(asset_type=AssetType.COLLATERAL, signature_type=0)
+                )
+                balance = payload.get("balance") if isinstance(payload, dict) else None
+                if balance is not None:
+                    return float(balance)
+            except Exception as e:  # noqa: BLE001
+                log.warning("clob balance_allowance failed, falling back to onchain balance: %s", e)
+        abi = [{
+            "type": "function",
+            "name": "balanceOf",
+            "stateMutability": "view",
+            "inputs": [{"name": "account", "type": "address"}],
+            "outputs": [{"name": "", "type": "uint256"}],
+        }]
+        contract = self._w3.eth.contract(address=Web3.to_checksum_address(self._collateral), abi=abi)
+        raw = int(contract.functions.balanceOf(
+            Web3.to_checksum_address(self._client.get_address())
+        ).call())
+        return float(Decimal(raw) / Decimal(10**6))
+
 
 def submit_for_burner(
     burner_private_key: str,
@@ -118,3 +178,26 @@ def submit_for_burner(
     if side_norm == "SELL":
         return submitter.market_sell(token_id=token_id, share_amount=float(amount))
     raise ValueError(f"unknown side: {side}")
+
+
+def close_for_burner(
+    burner_private_key: str,
+    token_id: str,
+    share_amount: float | None = None,
+) -> tuple[ClobOrderResult, BurnerBalanceSnapshot]:
+    host = os.environ.get("POLYMARKET_CLOB_HOST", DEFAULT_HOST)
+    chain_id = int(os.environ.get("POLYMARKET_CHAIN_ID", str(POLYGON)))
+    submitter = ClobSubmitter(burner_private_key=burner_private_key, host=host, chain_id=chain_id)
+    shares = float(share_amount) if share_amount is not None else submitter.get_share_balance(token_id)
+    if shares <= 0:
+        raise ValueError("burner has no shares to exit for this token")
+    usdc_before = submitter.get_usdc_balance()
+    result = submitter.market_sell(token_id=token_id, share_amount=shares)
+    usdc_after = submitter.get_usdc_balance()
+    exit_usdc = max(0.0, usdc_after - usdc_before)
+    return result, BurnerBalanceSnapshot(
+        shares=shares,
+        usdc_before=usdc_before,
+        usdc_after=usdc_after,
+        exit_usdc=exit_usdc,
+    )

@@ -22,7 +22,7 @@ ENV_FILE   := $(ROOT)/.env
         app cogito signal execution orchestrator-once orchestrator-loop orchestrator-dry \
         demo stop status \
         contracts-test typecheck \
-        smoke-keeperhub preflight e2e-real \
+        smoke-keeperhub sponsor-smoke preflight e2e-real \
         clean
 
 help:
@@ -38,6 +38,7 @@ help:
 	@echo "  orchestrator-dry   daemon orchestrator loop (no /open calls)"
 	@echo "  contracts-test     forge test --via-ir"
 	@echo "  typecheck          tsc --noEmit (cogito only)"
+	@echo "  sponsor-smoke      run live sponsor-backed smoke checks"
 	@echo "  preflight          check which demo tier (T0-T6) the current .env unlocks"
 	@echo "  e2e-real           preflight (require T4) → fire one real /open with \$$1 USDC"
 	@echo "  stop               kill anything started by 'make demo'"
@@ -148,6 +149,10 @@ typecheck:
 # Writes proof tx hash to docs/proof/keeperhub.md.
 smoke-keeperhub:
 	cd services && uv run --env-file $(ENV_FILE) python -m execution_router.scripts.smoke_keeperhub
+
+sponsor-smoke:
+	@if [ ! -f $(ENV_FILE) ]; then echo "ERROR: $(ENV_FILE) missing"; exit 1; fi
+	cd services && uv run --env-file $(ENV_FILE) python -m execution_router.scripts.sponsor_smoke
 
 # ── readiness preflight ───────────────────────────────────────────────────────
 #

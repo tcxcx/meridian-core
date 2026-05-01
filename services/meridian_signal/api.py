@@ -8,6 +8,7 @@ Routes (Phase 1):
 Routes (later phases):
     GET  /api/signal/run/{run_id}         → poll long-running runs (Phase 2+)
     POST /api/signal/execute              → kick off execution-router (Phase 4)
+    POST /api/signal/backtest             → score swarm on resolved markets
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from dotenv import load_dotenv
 from flask import Blueprint, Flask, jsonify, request
 from flask_cors import CORS
 
-from . import _dns_fallback, cryo, entropy, matcher, polymarket, seed, swarm, topology, zg_client
+from . import _dns_fallback, backtest, cryo, entropy, matcher, polymarket, seed, swarm, topology, zg_client
 
 _dns_fallback.install()
 
@@ -171,6 +172,20 @@ def run_signal():
         "simulation_tx_0g": sim_pin.tx_hash if sim_pin else None,
         "attestation_envelope": out.attestation_envelope,
     })
+
+
+@signal_bp.post("/backtest")
+def run_backtest_route():
+    body = request.get_json(silent=True) or {}
+    limit = int(body.get("limit", 5))
+    min_liq = float(body.get("min_liquidity_usd", 5_000.0))
+    resolved_threshold = float(body.get("resolved_threshold", 0.99))
+    result = backtest.run_backtest(
+        limit=limit,
+        min_liquidity_usd=min_liq,
+        resolved_threshold=resolved_threshold,
+    )
+    return jsonify(result)
 
 
 @signal_bp.get("/entropy")

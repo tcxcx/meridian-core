@@ -1,0 +1,16 @@
+{
+  "name": "@miroshark/web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@miroshark/ui": "file:../../packages/ui",
+    "@repo/database": "file:../../packages/database",
+    "next": "^16.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}

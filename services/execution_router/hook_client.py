@@ -198,7 +198,8 @@ class HookClient:
     def _submit_direct(self, function_name: str, args: list) -> HookTxResult:
         if self._treasury_account is None:
             raise RuntimeError("direct submission requires TREASURY_PRIVATE_KEY")
-        fn = self._contract.get_function_by_name(function_name)(*args)
+        abi_args = [self._abi_arg(a) for a in args]
+        fn = self._contract.get_function_by_name(function_name)(*abi_args)
         tx = fn.build_transaction(
             {
                 "from": self._treasury_account.address,
@@ -224,6 +225,12 @@ class HookClient:
             ]
         if isinstance(arg, (bytes, bytearray)):
             return "0x" + bytes(arg).hex()
+        return arg
+
+    @staticmethod
+    def _abi_arg(arg):
+        if isinstance(arg, SealedInput):
+            return arg.as_tuple()
         return arg
 
 

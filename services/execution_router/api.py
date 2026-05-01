@@ -82,6 +82,16 @@ def _polygon_direct_balance(client) -> float | None:
         return None
 
 
+def _polygon_direct_native_balance(client) -> float | None:
+    if client is None:
+        return None
+    try:
+        return client.native_balance()
+    except Exception as e:  # noqa: BLE001
+        log.warning("polygon direct native balance unavailable: %s", e)
+        return None
+
+
 def _sealed_from_payload(handle: dict) -> SealedInput:
     """Parse the orchestrator-side `encrypted_size_handle` (Bucket 4).
 
@@ -104,6 +114,69 @@ def _sealed_from_payload(handle: dict) -> SealedInput:
         utype=int(handle.get("utype", 8)),
         signature=bytes.fromhex(sig_hex) if sig_hex else b"",
     )
+
+
+def _bridge_burner_proceeds_to_treasury(
+    *,
+    record: PositionRecord,
+    bridge,
+    trading_chain: str,
+    settlement_chain: str,
+    burner_private_key: str,
+    treasury_address: str,
+    payout_usdc: float,
+    audit_fn,
+    store: PositionStore,
+    failure_status: str = "failed",
+):
+    dep_result = bridge.deposit(
+        chain=trading_chain,
+        amount_usdc=float(payout_usdc),
+        signer="burner",
+        burner_private_key=burner_private_key,
+    )
+    record.gateway_deposit_approve_tx = dep_result.approve_tx
+    record.gateway_deposit_tx = dep_result.deposit_tx
+    if not dep_result.ok:
+        record.status = failure_status
+        record.error = f"gateway deposit failed: {dep_result.state}"
+        store.upsert(record)
+        audit_fn("gateway_deposit.err", position_id=record.position_id, status="err",
+                 payload={"state": dep_result.state})
+        return False, jsonify({"error": record.error, "position": record.to_json()}), 502
+    audit_fn("gateway_deposit.ok", position_id=record.position_id, payload={
+        "chain": trading_chain, "amount": float(payout_usdc),
+        "approve_tx": dep_result.approve_tx, "deposit_tx": dep_result.deposit_tx,
+        "dry_run": dep_result.dry_run,
+    })
+
+    recv_result = bridge.bridge(
+        signer="burner",
+        burner_private_key=burner_private_key,
+        from_chain=trading_chain,
+        to_chain=settlement_chain,
+        amount_usdc=float(payout_usdc),
+        recipient=treasury_address,
+        use_forwarder=True,
+    )
+    record.bridge_recv_burn_tx = recv_result.burn_tx
+    record.bridge_recv_mint_tx = recv_result.mint_tx
+    if not recv_result.ok:
+        record.status = failure_status
+        record.error = f"bridge recv failed: {recv_result.state}"
+        store.upsert(record)
+        audit_fn("bridge_recv.err", position_id=record.position_id, status="err", payload={
+            "state": recv_result.state, "transfer_id": recv_result.transfer_id,
+        })
+        return False, jsonify({"error": record.error, "position": record.to_json()}), 502
+    audit_fn("bridge_recv.ok", position_id=record.position_id, payload={
+        "from": trading_chain, "to": settlement_chain,
+        "amount": float(payout_usdc),
+        "transfer_id": recv_result.transfer_id,
+        "burn_tx": recv_result.burn_tx, "mint_tx": recv_result.mint_tx,
+        "dry_run": recv_result.dry_run,
+    })
+    return True, None, None
 
 
 def create_app() -> Flask:
@@ -349,6 +422,129 @@ def create_app() -> Flask:
         })
         return jsonify({"position": record.to_json(), "clob_status": order.status})
 
+    @bp.post("/close")
+    def close_position():
+        body = request.get_json(silent=True) or {}
+        position_id = body.get("position_id")
+        share_amount = body.get("share_amount")
+        bridge_back = bool(body.get("bridge_back", True))
+        reason = body.get("reason") or "manual_exit"
+        if not position_id:
+            return jsonify({"error": "position_id required"}), 400
+        record = store.get(position_id)
+        if record is None:
+            return jsonify({"error": f"unknown position: {position_id}"}), 404
+        retry_bridge_only = (
+            record.status == "exited"
+            and bridge_back
+            and bool(record.exit_usdc and record.exit_usdc > 0)
+            and not record.bridge_recv_burn_tx
+        )
+        if record.status != "open" and not retry_bridge_only:
+            return jsonify({"error": f"position is not open: {record.status}", "position": record.to_json()}), 409
+        if factory is None:
+            return jsonify({"error": "BURNER_SEED not configured"}), 500
+        burner = factory.derive(position_id, strategy_id=record.strategy, tenant_id=record.tenant_id)
+
+        if retry_bridge_only:
+            _audit("close_bridge.retry", position_id=position_id, payload={
+                "bridge_back": bridge_back,
+                "reason": reason,
+                "exit_usdc": record.exit_usdc,
+            })
+        else:
+            record.status = "closing"
+            store.upsert(record)
+            _audit("close.received", position_id=position_id, payload={
+                "share_amount": share_amount,
+                "bridge_back": bridge_back,
+                "reason": reason,
+            })
+
+            try:
+                exit_order, balances = clob_client.close_for_burner(
+                    burner_private_key=burner.private_key,
+                    token_id=record.token_id,
+                    share_amount=float(share_amount) if share_amount is not None else None,
+                )
+                if exit_order.status != "submitted":
+                    record.status = "open"
+                    record.error = f"close did not submit to Polymarket: {exit_order.status}"
+                    store.upsert(record)
+                    _audit("clob_exit.dry_run", position_id=position_id, status="err", payload={
+                        "order_id": exit_order.order_id,
+                        "status": exit_order.status,
+                    })
+                    return jsonify({"error": record.error, "position": record.to_json()}), 409
+                record.exit_order_id = exit_order.order_id
+                record.exit_shares = balances.shares
+                record.exit_usdc = balances.exit_usdc
+                record.status = "exited"
+                store.upsert(record)
+                _audit("clob_exit.ok", position_id=position_id, payload={
+                    "order_id": exit_order.order_id,
+                    "status": exit_order.status,
+                    "shares": balances.shares,
+                    "usdc_before": balances.usdc_before,
+                    "usdc_after": balances.usdc_after,
+                    "exit_usdc": balances.exit_usdc,
+                })
+            except Exception as e:  # noqa: BLE001
+                record.status = "open"
+                record.error = f"close: {e}"
+                store.upsert(record)
+                _audit("clob_exit.err", position_id=position_id, status="err", payload={"error": str(e)})
+                return jsonify({"error": record.error, "position": record.to_json()}), 502
+
+        if bridge_back and record.exit_usdc and record.exit_usdc > 0:
+            treasury_address = hook.treasury_address if hook is not None else None
+            if not treasury_address:
+                record.status = "exited"
+                record.error = "close bridge-back requested but hook/treasury address is unavailable"
+                store.upsert(record)
+                return jsonify({"error": record.error, "position": record.to_json()}), 502
+            try:
+                ok, resp, code = _bridge_burner_proceeds_to_treasury(
+                    record=record,
+                    bridge=bridge,
+                    trading_chain=trading_chain,
+                    settlement_chain=settlement_chain,
+                    burner_private_key=burner.private_key,
+                    treasury_address=treasury_address,
+                    payout_usdc=float(record.exit_usdc),
+                    audit_fn=_audit,
+                    store=store,
+                    failure_status="exited",
+                )
+                if not ok:
+                    return resp, code
+            except Exception as e:  # noqa: BLE001
+                record.status = "exited"
+                record.error = f"close bridge-back: {e}"
+                store.upsert(record)
+                _audit("close_bridge.err", position_id=position_id, status="err", payload={"error": str(e)})
+                return jsonify({"error": record.error, "position": record.to_json()}), 502
+
+        record.status = "exited"
+        record.error = None
+        store.upsert(record)
+        _audit("close.ok", position_id=position_id, payload={
+            "exit_order_id": record.exit_order_id,
+            "exit_shares": record.exit_shares,
+            "exit_usdc": record.exit_usdc,
+            "reason": reason,
+            "bridge_back": bridge_back,
+        })
+        return jsonify({
+            "position": record.to_json(),
+            "exit": {
+                "order_id": record.exit_order_id,
+                "shares": record.exit_shares,
+                "usdc": record.exit_usdc,
+                "bridge_back": bridge_back,
+            },
+        })
+
     @bp.post("/resolve")
     def resolve_position():
         body = request.get_json(silent=True) or {}
@@ -380,61 +576,19 @@ def create_app() -> Flask:
         )
         if burner_obj is not None and float(payout_usdc) > 0:
             try:
-                dep_result = bridge.deposit(
-                    chain=trading_chain,
-                    amount_usdc=float(payout_usdc),
-                    signer="burner",
+                ok, resp, code = _bridge_burner_proceeds_to_treasury(
+                    record=record,
+                    bridge=bridge,
+                    trading_chain=trading_chain,
+                    settlement_chain=settlement_chain,
                     burner_private_key=burner_obj.private_key,
+                    treasury_address=treasury_address,
+                    payout_usdc=float(payout_usdc),
+                    audit_fn=_audit,
+                    store=store,
                 )
-                record.gateway_deposit_approve_tx = dep_result.approve_tx
-                record.gateway_deposit_tx = dep_result.deposit_tx
-                if not dep_result.ok:
-                    record.status = "failed"
-                    record.error = f"gateway deposit failed: {dep_result.state}"
-                    store.upsert(record)
-                    _audit("gateway_deposit.err", position_id=position_id, status="err",
-                           payload={"state": dep_result.state})
-                    return jsonify({"error": record.error, "position": record.to_json()}), 502
-                _audit("gateway_deposit.ok", position_id=position_id, payload={
-                    "chain": trading_chain, "amount": float(payout_usdc),
-                    "approve_tx": dep_result.approve_tx, "deposit_tx": dep_result.deposit_tx,
-                    "dry_run": dep_result.dry_run,
-                })
-            except Exception as e:  # noqa: BLE001
-                record.status = "failed"
-                record.error = f"gateway deposit: {e}"
-                store.upsert(record)
-                _audit("gateway_deposit.err", position_id=position_id, status="err",
-                       payload={"error": str(e)})
-                return jsonify({"error": record.error, "position": record.to_json()}), 502
-
-            try:
-                recv_result = bridge.bridge(
-                    signer="burner",
-                    burner_private_key=burner_obj.private_key,
-                    from_chain=trading_chain,
-                    to_chain=settlement_chain,
-                    amount_usdc=float(payout_usdc),
-                    recipient=treasury_address,
-                    use_forwarder=True,
-                )
-                record.bridge_recv_burn_tx = recv_result.burn_tx
-                record.bridge_recv_mint_tx = recv_result.mint_tx
-                if not recv_result.ok:
-                    record.status = "failed"
-                    record.error = f"bridge recv failed: {recv_result.state}"
-                    store.upsert(record)
-                    _audit("bridge_recv.err", position_id=position_id, status="err", payload={
-                        "state": recv_result.state, "transfer_id": recv_result.transfer_id,
-                    })
-                    return jsonify({"error": record.error, "position": record.to_json()}), 502
-                _audit("bridge_recv.ok", position_id=position_id, payload={
-                    "from": trading_chain, "to": settlement_chain,
-                    "amount": float(payout_usdc),
-                    "transfer_id": recv_result.transfer_id,
-                    "burn_tx": recv_result.burn_tx, "mint_tx": recv_result.mint_tx,
-                    "dry_run": recv_result.dry_run,
-                })
+                if not ok:
+                    return resp, code
             except Exception as e:  # noqa: BLE001
                 record.status = "failed"
                 record.error = f"bridge recv: {e}"
@@ -569,9 +723,12 @@ def create_app() -> Flask:
             cogito_health = _fetch_json(f"{cogito_base.rstrip('/')}/health") or {}
             bridge_ready = bool(cogito_health.get("bridge", {}).get("ready")) if cogito_health else bridge is not None
             fhe_ready = bool(cogito_health.get("fhe", {}).get("ready")) if cogito_health else False
+            fhe_live = bool(cogito_health.get("fhe", {}).get("live")) if cogito_health else False
+            fhe_last_error = cogito_health.get("fhe", {}).get("lastError") if cogito_health else None
             zg_storage_ready = bool(cogito_health.get("storage", {}).get("ok")) if cogito_health else False
             zg_compute_ready = bool(cogito_health.get("compute", {}).get("ok")) if cogito_health else False
             gateway_balance = cogito_health.get("gateway", {}).get("treasuryBalance")
+            gateway_balances = cogito_health.get("gateway", {}).get("balances") or []
             swarm_backend = os.environ.get("SWARM_BACKEND", "lite").strip().lower() or "lite"
             openclaw_enabled = _env_truthy("OPENCLAW_OPERATOR_ENABLED")
             openclaw_session = bool(os.environ.get("OPENCLAW_SESSION"))
@@ -590,6 +747,16 @@ def create_app() -> Flask:
             fhe_key_ready = bool(os.environ.get("FHE_PRIVATE_KEY") or os.environ.get("TREASURY_PRIVATE_KEY"))
             zg_key_ready = bool(os.environ.get("ZG_PRIVATE_KEY"))
             axl_ready = swarm_backend == "axl"
+            direct_polygon_balance = _polygon_direct_balance(polygon_funding)
+            direct_polygon_native_balance = _polygon_direct_native_balance(polygon_funding)
+
+            gateway_seeded = gateway_balance not in (0, 0.0, "0", "0.0", None)
+            polygon_direct_gas_ready = (
+                direct_polygon_native_balance is not None and float(direct_polygon_native_balance) > 0
+            )
+            polygon_direct_usdc_ready = (
+                direct_polygon_balance is not None and float(direct_polygon_balance) > 0
+            )
 
             sponsors = [
                 {
@@ -611,26 +778,42 @@ def create_app() -> Flask:
                 {
                     "key": "fhenix",
                     "label": "Fhenix CoFHE",
-                    "ready": fhe_ready and hook_ready,
-                    "mode": "live" if fhe_ready and hook_ready else "degraded",
+                    "ready": fhe_ready and fhe_live and hook_ready,
+                    "mode": "live" if fhe_ready and fhe_live and hook_ready else "degraded",
                     "detail": "encrypted notional and payout handling",
-                    "blocker": None if fhe_ready and hook_ready else "configure FHE signer and deploy hook on Arbitrum Sepolia",
+                    "blocker": None if fhe_ready and fhe_live and hook_ready else (
+                        f"cofhejs init/encrypt failing: {str(fhe_last_error)[:120]}"
+                        if fhe_ready and hook_ready and fhe_last_error
+                        else "configure FHE signer and deploy hook on Arbitrum Sepolia"
+                    ),
                 },
                 {
                     "key": "uniswap",
                     "label": "Uniswap v4",
-                    "ready": hook_ready,
-                    "mode": "hook-live" if hook_ready else "offline",
+                    "ready": hook_ready and fhe_live,
+                    "mode": "hook-live" if hook_ready and fhe_live else "hook-deployed" if hook_ready else "offline",
                     "detail": "PrivateSettlementHook settlement rail",
-                    "blocker": None if hook_ready else "set ARB_SEPOLIA_RPC_URL and MERIDIAN_HOOK_ADDRESS",
+                    "blocker": None if hook_ready and fhe_live else (
+                        "Fhenix encrypt leg is not live, so the settlement hook cannot fund positions end-to-end."
+                        if hook_ready
+                        else "set ARB_SEPOLIA_RPC_URL and MERIDIAN_HOOK_ADDRESS"
+                    ),
                 },
                 {
                     "key": "circle",
                     "label": "Circle CCTP",
-                    "ready": bridge_ready and treasury_key_ready,
-                    "mode": "forwarder" if bridge_ready and treasury_key_ready else "offline",
+                    "ready": bridge_ready and treasury_key_ready and gateway_seeded,
+                    "mode": "forwarder" if bridge_ready and treasury_key_ready and gateway_seeded else "degraded" if bridge_ready and treasury_key_ready else "offline",
                     "detail": "unified balance bridge between settlement and trading",
-                    "blocker": None if bridge_ready and treasury_key_ready else "set TREASURY_PRIVATE_KEY and pre-seed Gateway balance",
+                    "blocker": (
+                        None
+                        if bridge_ready and treasury_key_ready and gateway_seeded
+                        else "Gateway is not seeded, and the Polygon-first direct donor path is missing native gas."
+                        if bridge_ready and treasury_key_ready and polygon_direct_usdc_ready and not polygon_direct_gas_ready
+                        else "pre-seed Gateway balance so Circle forwarding can execute real cross-chain transfers"
+                        if bridge_ready and treasury_key_ready
+                        else "set TREASURY_PRIVATE_KEY and pre-seed Gateway balance"
+                    ),
                 },
                 {
                     "key": "polymarket",
@@ -663,6 +846,10 @@ def create_app() -> Flask:
                 next_blockers.append("Set ARB_SEPOLIA_RPC_URL and MERIDIAN_HOOK_ADDRESS for the Uniswap/Fhenix settlement rail.")
             if bridge_ready and gateway_balance in (0, 0.0, "0", "0.0", None):
                 next_blockers.append("Pre-seed the Circle Gateway treasury balance on Arbitrum Sepolia.")
+            if polygon_direct_usdc_ready and not polygon_direct_gas_ready:
+                next_blockers.append("Fund the Polygon Amoy treasury signer with native gas so the direct donor path can transfer USDC.")
+            if fhe_ready and not fhe_live:
+                next_blockers.append("Fix Fhenix/@cofhe/sdk initialization so /fhe/encrypt can mint a real InEuint128.")
             if not zg_key_ready:
                 next_blockers.append("Set ZG_PRIVATE_KEY to enable 0G Storage and 0G Compute.")
             if not axl_ready:
@@ -674,7 +861,8 @@ def create_app() -> Flask:
                 cfg=cfg,
                 positions=records,
                 cogito_health=cogito_health,
-                direct_polygon_balance_usdc=_polygon_direct_balance(polygon_funding),
+                direct_polygon_balance_usdc=direct_polygon_balance,
+                direct_polygon_native_balance=direct_polygon_native_balance,
                 keeperhub_ready=keeperhub is not None,
                 openclaw_enabled=openclaw_enabled,
                 openclaw_session=openclaw_session,
@@ -714,6 +902,9 @@ def create_app() -> Flask:
                     "hook_address_ready": hook_address_ready,
                     "settlement_rpc_ready": arb_rpc_ready,
                     "gateway_treasury_balance": gateway_balance,
+                    "gateway_domain_balances": gateway_balances,
+                    "direct_polygon_balance_usdc": direct_polygon_balance,
+                    "direct_polygon_native_balance": direct_polygon_native_balance,
                 },
                 "capital_plane": capital_plane,
                 "next_blockers": next_blockers,
@@ -741,6 +932,7 @@ def create_app() -> Flask:
                 positions=store.list(),
                 cogito_health=cogito_health,
                 direct_polygon_balance_usdc=_polygon_direct_balance(polygon_funding),
+                direct_polygon_native_balance=_polygon_direct_native_balance(polygon_funding),
                 keeperhub_ready=keeperhub is not None,
                 openclaw_enabled=openclaw_enabled,
                 openclaw_session=openclaw_session,

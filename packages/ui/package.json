@@ -1,0 +1,26 @@
+{
+  "name": "@miroshark/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "exports": {
+    "./globals.css": "./src/globals.css",
+    "./brand": "./src/brand/miroshark-brand.js",
+    "./terminal-shell": "./src/components/terminal-shell.jsx",
+    "./terminal-card": "./src/components/terminal-card.jsx",
+    "./unicorn-scene": "./src/components/unicorn-scene.jsx",
+    "./setup-progress": "./src/components/setup-progress.jsx",
+    "./summary-grid": "./src/components/summary-grid.jsx"
+  },
+  "dependencies": {
+    "unicornstudio-react": "^2.1.9"
+  },
+  "peerDependencies": {
+    "next": "^16",
+    "react": "^19",
+    "react-dom": "^19"
+  }
+}
