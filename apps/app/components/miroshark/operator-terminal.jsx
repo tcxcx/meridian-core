@@ -137,8 +137,13 @@ export default function OperatorTerminal() {
   const [activeCapitalModal, setActiveCapitalModal] = useState('')
 
   const positionsEventSourceRef = useRef(null)
+  const positionsRetryTimerRef = useRef(null)
+  const positionsRetryCountRef = useRef(0)
+  const positionsUnmountedRef = useRef(false)
   const streamingMarketIdRef = useRef(null)
   const swarmEventSourceRef = useRef(null)
+  const swarmRetryTimerRef = useRef(null)
+  const swarmRetryCountRef = useRef(0)
   const refreshTimerRef = useRef(null)
   const bootedRef = useRef(false)
   const capitalModalSeededRef = useRef(false)
@@ -558,6 +563,11 @@ export default function OperatorTerminal() {
       swarmEventSourceRef.current.close()
       swarmEventSourceRef.current = null
     }
+    if (swarmRetryTimerRef.current) {
+      window.clearTimeout(swarmRetryTimerRef.current)
+      swarmRetryTimerRef.current = null
+    }
+    swarmRetryCountRef.current = 0
     streamingMarketIdRef.current = null
   }
 
@@ -570,11 +580,14 @@ export default function OperatorTerminal() {
     }, ...current].slice(0, 40))
   }
 
+  // E2: cap swarm reconnect attempts. Swarm runs may have completed
+  // server-side; retrying forever after disconnect is misleading. 3 tries
+  // with exponential backoff (1s / 2s / 4s) is the cheap "wifi blip"
+  // recovery; after that we mark offline and let the user re-click Debate.
+  const SWARM_MAX_RETRIES = 3
+
   const streamSelectedSignal = () => {
     if (!selectedMarket) return
-    // E5: pin the market this stream belongs to. Every handler closes
-    // over these locals so flipping selectedMarket mid-stream cannot
-    // misroute belief updates or write consensus to the wrong cache.
     const streamMarketId = selectedMarket.market_id
     const streamMarketQuestion = selectedMarket.question
     resetSwarmStream()
@@ -583,81 +596,132 @@ export default function OperatorTerminal() {
     setStreamStatus('connecting')
     streamingMarketIdRef.current = streamMarketId
 
-    const source = new EventSource(`${SIGNAL_BASE}/api/signal/runs/stream?market_id=${encodeURIComponent(streamMarketId)}`)
-    swarmEventSourceRef.current = source
+    const openSource = () => {
+      const source = new EventSource(`${SIGNAL_BASE}/api/signal/runs/stream?market_id=${encodeURIComponent(streamMarketId)}`)
+      swarmEventSourceRef.current = source
 
-    source.addEventListener('run', (event) => {
-      const payload = JSON.parse(event.data)
-      setStreamStatus('live')
-      appendSwarmFeed('run', 'run', payload.question || streamMarketQuestion)
-    })
-    source.addEventListener('start', (event) => {
-      const payload = JSON.parse(event.data)
-      appendSwarmFeed('start', 'swarm', `${payload.specs} agents · ${payload.nodes.length} nodes · ${payload.rounds} rounds`)
-    })
-    source.addEventListener('belief', (event) => {
-      const payload = JSON.parse(event.data)
-      const probs = Object.entries(payload.probabilities || {})
-        .map(([key, value]) => `${key} ${(Number(value) * 100).toFixed(0)}%`)
-        .join(' · ')
-      appendSwarmFeed('belief', payload.agent_id, `${probs}${payload.reasoning ? ` · ${payload.reasoning}` : ''}`)
-    })
-    source.addEventListener('agent_error', (event) => {
-      const payload = JSON.parse(event.data)
-      appendSwarmFeed('error', payload.agent_id, payload.error || 'agent error')
-    })
-    source.addEventListener('result', async (event) => {
-      const payload = JSON.parse(event.data)
-      const consensus = Object.entries(payload.result?.consensus || {})
-        .map(([key, value]) => `${key} ${(Number(value) * 100).toFixed(1)}%`)
-        .join(' · ')
-      appendSwarmFeed('result', 'consensus', consensus)
-      setStreamStatus('complete')
-      setStreamLoading(false)
-      resetSwarmStream()
-      await runSignalForMarket(streamMarketId, { quiet: true })
-      if (streamMarketId === selectedMarketId) await fetchEntropy()
-    })
-    source.onerror = () => {
-      setStreamStatus('offline')
-      setStreamLoading(false)
-      addAlert('swarm stream disconnected', 'warn')
-      resetSwarmStream()
+      source.addEventListener('run', (event) => {
+        const payload = JSON.parse(event.data)
+        setStreamStatus('live')
+        // Reset backoff on first server message — the stream is healthy.
+        swarmRetryCountRef.current = 0
+        appendSwarmFeed('run', 'run', payload.question || streamMarketQuestion)
+      })
+      source.addEventListener('start', (event) => {
+        const payload = JSON.parse(event.data)
+        appendSwarmFeed('start', 'swarm', `${payload.specs} agents · ${payload.nodes.length} nodes · ${payload.rounds} rounds`)
+      })
+      source.addEventListener('belief', (event) => {
+        const payload = JSON.parse(event.data)
+        const probs = Object.entries(payload.probabilities || {})
+          .map(([key, value]) => `${key} ${(Number(value) * 100).toFixed(0)}%`)
+          .join(' · ')
+        appendSwarmFeed('belief', payload.agent_id, `${probs}${payload.reasoning ? ` · ${payload.reasoning}` : ''}`)
+      })
+      source.addEventListener('agent_error', (event) => {
+        const payload = JSON.parse(event.data)
+        appendSwarmFeed('error', payload.agent_id, payload.error || 'agent error')
+      })
+      source.addEventListener('result', async (event) => {
+        const payload = JSON.parse(event.data)
+        const consensus = Object.entries(payload.result?.consensus || {})
+          .map(([key, value]) => `${key} ${(Number(value) * 100).toFixed(1)}%`)
+          .join(' · ')
+        appendSwarmFeed('result', 'consensus', consensus)
+        setStreamStatus('complete')
+        setStreamLoading(false)
+        resetSwarmStream()
+        await runSignalForMarket(streamMarketId, { quiet: true })
+        if (streamMarketId === selectedMarketId) await fetchEntropy()
+      })
+      source.onerror = () => {
+        if (source !== swarmEventSourceRef.current) return
+        source.close()
+        swarmEventSourceRef.current = null
+        const attempt = swarmRetryCountRef.current + 1
+        if (attempt > SWARM_MAX_RETRIES) {
+          setStreamStatus('offline — click Debate to retry')
+          setStreamLoading(false)
+          addAlert(`swarm stream lost after ${SWARM_MAX_RETRIES} retries`, 'warn')
+          resetSwarmStream()
+          return
+        }
+        const delayMs = 1000 * Math.pow(2, attempt - 1)
+        swarmRetryCountRef.current = attempt
+        setStreamStatus(`reconnecting (${attempt}/${SWARM_MAX_RETRIES})`)
+        swarmRetryTimerRef.current = window.setTimeout(() => {
+          swarmRetryTimerRef.current = null
+          if (streamingMarketIdRef.current === streamMarketId) openSource()
+        }, delayMs)
+      }
     }
+
+    openSource()
   }
+
+  // E2: positions stream is the demo backbone. Reconnect indefinitely with
+  // exponential backoff (capped at 30s between attempts). Reset attempt
+  // count on every successful event so a recovered stream behaves cleanly.
+  const POSITIONS_MAX_DELAY_MS = 30000
 
   const startPositionsStream = useEffectEvent(() => {
     if (positionsEventSourceRef.current) {
       positionsEventSourceRef.current.close()
     }
-    const source = new EventSource(`${EXECUTION_BASE}/api/execution/positions/stream`)
-    positionsEventSourceRef.current = source
+    if (positionsRetryTimerRef.current) {
+      window.clearTimeout(positionsRetryTimerRef.current)
+      positionsRetryTimerRef.current = null
+    }
 
-    source.addEventListener('snapshot', (event) => {
-      const payload = JSON.parse(event.data)
-      const nextPositions = payload.positions || []
-      setPositions(nextPositions)
-      nextPositions.forEach((position) => fetchAudit(position.position_id, { silent: true }))
-    })
+    const openSource = () => {
+      const source = new EventSource(`${EXECUTION_BASE}/api/execution/positions/stream`)
+      positionsEventSourceRef.current = source
 
-    source.addEventListener('position', (event) => {
-      const payload = JSON.parse(event.data)
-      setPositions((current) => {
-        const next = current.filter((item) => item.position_id !== payload.position_id)
-        next.unshift(payload)
-        return next
+      source.addEventListener('snapshot', (event) => {
+        positionsRetryCountRef.current = 0
+        const payload = JSON.parse(event.data)
+        const nextPositions = payload.positions || []
+        setPositions(nextPositions)
+        // E6: dedupe N+1 audit fetch storm. Only fetch audit for positions
+        // we have not already cached. Snapshot fires on every reconnect, so
+        // the un-guarded forEach used to hammer the router on flaky wifi.
+        nextPositions.forEach((position) => {
+          if (!auditByPosition[position.position_id]) {
+            fetchAudit(position.position_id, { silent: true })
+          }
+        })
       })
-      addAlert(`position ${shorten(payload.position_id, 8)} → ${payload.status}`, payload.status === 'failed' ? 'warn' : 'info')
-      fetchAudit(payload.position_id, { silent: true })
-    })
 
-    source.onerror = () => {
-      addAlert('positions stream disconnected', 'warn')
-      if (positionsEventSourceRef.current) {
-        positionsEventSourceRef.current.close()
+      source.addEventListener('position', (event) => {
+        positionsRetryCountRef.current = 0
+        const payload = JSON.parse(event.data)
+        setPositions((current) => {
+          const next = current.filter((item) => item.position_id !== payload.position_id)
+          next.unshift(payload)
+          return next
+        })
+        addAlert(`position ${shorten(payload.position_id, 8)} → ${payload.status}`, payload.status === 'failed' ? 'warn' : 'info')
+        fetchAudit(payload.position_id, { silent: true })
+      })
+
+      source.onerror = () => {
+        if (source !== positionsEventSourceRef.current) return
+        source.close()
         positionsEventSourceRef.current = null
+        if (positionsUnmountedRef.current) return
+        const attempt = positionsRetryCountRef.current + 1
+        positionsRetryCountRef.current = attempt
+        const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), POSITIONS_MAX_DELAY_MS)
+        const delayLabel = delayMs >= 1000 ? `${Math.round(delayMs / 1000)}s` : `${delayMs}ms`
+        addAlert(`positions stream lost — reconnecting in ${delayLabel} (attempt ${attempt})`, 'warn')
+        positionsRetryTimerRef.current = window.setTimeout(() => {
+          positionsRetryTimerRef.current = null
+          if (!positionsUnmountedRef.current) openSource()
+        }, delayMs)
       }
     }
+
+    openSource()
   })
 
   const refreshGraphSurface = async () => {
@@ -708,8 +772,11 @@ export default function OperatorTerminal() {
     }, 30000)
 
     return () => {
+      positionsUnmountedRef.current = true
       if (positionsEventSourceRef.current) positionsEventSourceRef.current.close()
+      if (positionsRetryTimerRef.current) window.clearTimeout(positionsRetryTimerRef.current)
       if (swarmEventSourceRef.current) swarmEventSourceRef.current.close()
+      if (swarmRetryTimerRef.current) window.clearTimeout(swarmRetryTimerRef.current)
       if (refreshTimerRef.current) window.clearInterval(refreshTimerRef.current)
     }
   }, [bootTerminal, startPositionsStream, refreshPulse])
