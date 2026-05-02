@@ -17,9 +17,9 @@ export const MarketingBackdrop = {
             </div>
             <span className="ms-card-head-r">marketing</span>
           </div>
-          <div className="ms-card-title">Public landing and setup should share the same scene.</div>
+          <div className="ms-card-title">Shared scene.</div>
           <p className="ms-card-copy">
-            The backdrop is not decorative wallpaper. It is the atmospheric bridge between the public user story and the private operator setup routes.
+            Landing and setup use one visual system.
           </p>
         </section>
       </div>

@@ -13,32 +13,32 @@ const STEP_META = {
   workspace: {
     label: 'Workspace',
     eyebrow: 'Step 1',
-    title: 'Boot the workspace shell',
-    description: 'Create the private room, operator identity, and shared state before any wallet ceremony starts.',
+    title: 'Workspace',
+    description: 'Create the operator room.',
   },
   treasury: {
     label: 'Treasury',
     eyebrow: 'Step 2',
-    title: 'Provision treasury custody',
-    description: 'Run the Polygon modular-wallet ceremony and separate high-trust treasury custody from day-to-day execution.',
+    title: 'Treasury',
+    description: 'Create the passkey wallet.',
   },
   trading: {
     label: 'Trading',
     eyebrow: 'Step 3',
-    title: 'Confirm the trading rail',
-    description: 'Verify the agent trading wallet, deployable budget, and funding path onto Polygon Amoy.',
+    title: 'Trading',
+    description: 'Confirm the agent wallet.',
   },
   openclaw: {
     label: 'OpenClaw',
     eyebrow: 'Step 4',
-    title: 'Attach the external operator',
-    description: 'Connect your own OpenClaw runtime so the agent wallet can be managed under MiroShark policy.',
+    title: 'OpenClaw',
+    description: 'Connect automation.',
   },
   launch: {
     label: 'Launch',
     eyebrow: 'Step 5',
-    title: 'Enter the operator terminal',
-    description: 'Review readiness and move into the live terminal once custody, trading, and operator controls are in place.',
+    title: 'Launch',
+    description: 'Open the terminal.',
   },
 }
 
@@ -53,18 +53,15 @@ function percentForStep(step) {
   return Math.round(((index + 1) / STEP_ORDER.length) * 100)
 }
 
-function StepShell({ eyebrow, title, description, routeStep, children }) {
+function StepShell({ title, description, children, bare = false }) {
   return (
     <section className="stage-card setup-stage-card">
-      <div className="card-head">
-        <div className="card-head-l">
-          <span className="act-chip">{eyebrow}</span>
-          <span className="card-eyebrow">Setup Route</span>
-        </div>
-        <span className="card-head-r">/setup/{routeStep}</span>
-      </div>
-      <div className="card-title">{title}</div>
-      <p className="card-copy">{description}</p>
+      {bare ? null : (
+        <>
+          <div className="card-title">{title}</div>
+          <p className="card-copy">{description}</p>
+        </>
+      )}
       <div className="setup-stage-body">{children}</div>
     </section>
   )
@@ -103,7 +100,7 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
     model: 'claude-opus',
     manageAgentWallet: true,
     allowTreasuryProvisioning: true,
-    notes: 'Manage the MiroShark agent wallet, request replenishment, and keep position execution live.',
+    notes: 'Manage the agent wallet under policy.',
   })
 
   const load = async () => {
@@ -173,7 +170,7 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
       const payload = await response.json()
       if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`)
       await load()
-      setMessage('Workspace bootstrapped. Continue with treasury and trading wallet provisioning.')
+      setMessage('Ready.')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -195,7 +192,7 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
       if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`)
       await load()
       setOpenClawForm((current) => ({ ...current, apiKey: '' }))
-      setMessage('OpenClaw connected. The external operator can now manage the agent wallet under MiroShark policy.')
+      setMessage('Connected.')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -212,7 +209,7 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
       const payload = await response.json()
       if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`)
       await load()
-      setMessage('OpenClaw connector removed from this workspace.')
+      setMessage('Removed.')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -243,7 +240,7 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
   const activeStep = (() => {
     if (displayedStep === 'workspace') {
       return (
-        <StepShell {...currentMeta} routeStep={displayedStep}>
+        <StepShell {...currentMeta} routeStep={displayedStep} bare>
           <div className="field-stack">
             <label className="setup-field">
               <FieldLabel>Workspace title</FieldLabel>
@@ -256,15 +253,15 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
             <SharedSummaryGrid items={[
               ['Operator', actor.displayName || 'Unknown operator'],
               ['Persistence', persistence.mode || 'unknown'],
-              ['Auth', actor.authEnabled ? 'Clerk + database' : 'local fallback'],
+              ['Auth', actor.authEnabled ? 'Clerk' : 'local'],
               ['Room', status?.workspace?.liveblocksRoom || 'Pending'],
             ]} />
             <InfoPanel>
-              Bootstrap creates the operator room and advances the flow into the treasury ceremony. Setup owns the state transition; the terminal remains the live operating surface.
+              Creates the room and moves to treasury.
             </InfoPanel>
             <div className="setup-actions">
               <ActionButton onClick={bootstrap} disabled={busy}>
-                {busy ? 'Bootstrapping…' : 'Bootstrap workspace'}
+                  {busy ? 'Bootstrapping…' : 'Bootstrap'}
               </ActionButton>
               {setup.workspaceBootstrapped ? (
                 <ActionButton tone="secondary" onClick={() => persistStep('treasury', '/setup/treasury').catch((err) => setError(err instanceof Error ? err.message : String(err)))}>
@@ -279,29 +276,16 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
 
     if (displayedStep === 'treasury') {
       return (
-        <StepShell {...currentMeta} routeStep={displayedStep}>
-          <div className="field-stack">
-            <SharedSummaryGrid items={[
-              ['Funding mode', treasury.fundingMode || 'unconfigured'],
-              ['Treasury address', treasury.address ? shorten(treasury.address) : 'Pending'],
-              ['Legacy Circle', treasury.legacyCircleAddress ? shorten(treasury.legacyCircleAddress) : 'None'],
-              ['Provisioned', setup.treasuryProvisioned ? 'yes' : 'not yet'],
-            ]} />
-            <InfoPanel>
-              Treasury is the high-trust wallet. Complete the modular-wallet ceremony here: bootstrap signer, invite expansion, recovery plan, and treasury MSCA provisioning all happen on this route.
-            </InfoPanel>
-            <section className="setup-embedded-panel">
-              <TreasurySetupPanel embedded onProvisioned={load} />
-            </section>
-            {setup.treasuryProvisioned ? (
-              <div className="setup-actions">
-                <ActionButton tone="secondary" onClick={() => persistStep('trading', '/setup/trading').catch((err) => setError(err instanceof Error ? err.message : String(err)))}>
-                  Continue to trading
-                </ActionButton>
-              </div>
-            ) : null}
-          </div>
-        </StepShell>
+        <div className="treasury-focus-stack">
+          <TreasurySetupPanel embedded onProvisioned={load} />
+          {setup.treasuryProvisioned ? (
+            <div className="treasury-focus-next">
+              <ActionButton tone="secondary" onClick={() => persistStep('trading', '/setup/trading').catch((err) => setError(err instanceof Error ? err.message : String(err)))}>
+                Continue
+              </ActionButton>
+            </div>
+          ) : null}
+        </div>
       )
     }
 
@@ -310,13 +294,13 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
         <StepShell {...currentMeta} routeStep={displayedStep}>
           <div className="field-stack">
             <SharedSummaryGrid items={[
-              ['Trading wallet', trading.address ? shorten(trading.address) : 'Pending'],
+              ['Wallet', trading.address ? shorten(trading.address) : 'Pending'],
               ['Ready', setup.tradingWalletReady ? 'yes' : 'not yet'],
               ['Collaboration', setup.collaborationReady ? 'room ready' : 'pending'],
-              ['Shared signer', treasury.sharedWithTrading ? 'yes, split custody next' : 'no'],
+              ['Custody', treasury.sharedWithTrading ? 'funded signer' : 'split wallets'],
             ]} />
             <InfoPanel>
-              This step confirms the live execution wallet and funding rail. The agent must resolve onto Polygon Amoy with a clean deployable budget before automation begins.
+              Confirm the wallet that trades.
             </InfoPanel>
             <div className="setup-actions">
               <ActionButton href="/?onboarding=1">Open operator terminal</ActionButton>
@@ -371,7 +355,7 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
                 />
               </label>
               <label className="setup-field setup-field-wide">
-                <FieldLabel>Operator policy notes</FieldLabel>
+                <FieldLabel>Policy notes</FieldLabel>
                 <textarea
                   className="field-input setup-textarea"
                   value={openClawForm.notes}
@@ -381,9 +365,9 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
             </div>
             <SharedSummaryGrid items={[
               ['Status', openclaw.connected ? 'connected' : 'not connected'],
-              ['Trading wallet', trading.address ? shorten(trading.address) : 'Pending'],
-              ['Treasury wallet', treasury.address ? shorten(treasury.address) : 'Pending'],
-              ['Funding mode', treasury.fundingMode || 'unconfigured'],
+              ['Trading', trading.address ? shorten(trading.address) : 'Pending'],
+              ['Treasury', treasury.address ? shorten(treasury.address) : 'Pending'],
+              ['Mode', treasury.fundingMode || 'unconfigured'],
             ]} />
             {openClawManifest ? (
               <InfoPanel>
@@ -394,7 +378,7 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
             ) : null}
             <div className="setup-actions">
               <ActionButton onClick={connectOpenClaw} disabled={openClawBusy}>
-                {openClawBusy ? 'Connecting…' : openclaw.connected ? 'Update OpenClaw connector' : 'Connect OpenClaw'}
+                {openClawBusy ? 'Connecting…' : openclaw.connected ? 'Update OpenClaw' : 'Connect OpenClaw'}
               </ActionButton>
               <ActionButton tone="secondary" onClick={disconnectOpenClaw} disabled={openClawBusy || !openclaw.connected}>
                 Disconnect
@@ -416,22 +400,38 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
           <SharedSummaryGrid items={[
             ['Workspace', setup.workspaceBootstrapped ? 'ready' : 'pending'],
             ['Treasury', setup.treasuryProvisioned ? 'ready' : 'pending'],
-            ['Trading wallet', setup.tradingWalletReady ? 'ready' : 'pending'],
+            ['Trading', setup.tradingWalletReady ? 'ready' : 'pending'],
             ['OpenClaw', setup.openclawReady ? 'ready' : 'optional / pending'],
           ]} />
           <InfoPanel tone={setup.completed ? 'success' : 'default'}>
             {setup.completed
-              ? 'The setup coordinator is green. Enter the terminal and start operating the live system.'
-              : 'The platform is close, but one or more steps are still pending. Finish the missing custody or trading steps before going live.'}
+              ? 'Ready. Open terminal.'
+              : 'Finish the pending steps.'}
           </InfoPanel>
           <div className="setup-actions">
             <ActionButton href="/?onboarding=1">Open operator terminal</ActionButton>
-            <ActionButton tone="secondary" href="/">Try root route</ActionButton>
+            <ActionButton tone="secondary" href="/">Open root</ActionButton>
           </div>
         </div>
       </StepShell>
     )
   })()
+
+  if (displayedStep === 'treasury') {
+    return (
+      <MirosharkUnicornScene variant="setup">
+        <main className="treasury-page-shell">
+          <div className="treasury-page-top">
+            <a className="treasury-page-brand" href="/">MiroShark</a>
+            <span className="treasury-page-step">Treasury setup</span>
+          </div>
+          <section className="treasury-page-frame">
+            {activeStep}
+          </section>
+        </main>
+      </MirosharkUnicornScene>
+    )
+  }
 
   return (
     <MirosharkUnicornScene variant="setup">
@@ -440,32 +440,19 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
           <header className="terminal-header">
             <div className="brand-block">
               <div className="brand-mark">MIROSHARK</div>
-              <div className="brand-sub">setup terminal for custody, trading rails, and external operator control</div>
+              <div className="brand-sub">setup</div>
             </div>
             <div className="status-strip">
               <span className="status-pill">{currentMeta.label}</span>
               <span className="status-pill">{actor.authEnabled ? 'clerk auth' : 'local auth'}</span>
-              <span className="status-pill">{persistence.mode || 'persistence unknown'}</span>
-              <span className={`status-pill ${setup.completed ? '' : 'warn'}`}>setup {setup.completed ? 'green' : 'in progress'}</span>
+              <span className="status-pill">{persistence.mode || 'storage?'}</span>
+                <span className={`status-pill ${setup.completed ? '' : 'warn'}`}>{setup.completed ? 'ready' : 'in progress'}</span>
             </div>
           </header>
 
-          <main className="terminal-grid setup-grid">
+          <main className={`terminal-grid setup-grid${displayedStep === 'treasury' ? ' is-focus' : ''}`}>
+            {displayedStep === 'treasury' ? null : (
             <aside className="terminal-rail setup-rail">
-          <section className="rail-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">SYS</span>
-                <span className="card-eyebrow">Setup Story</span>
-              </div>
-              <span className="card-head-r">{progress}%</span>
-            </div>
-            <div className="card-title">Secure the operator stack before trading</div>
-            <p className="card-copy">
-              The setup routes now use the same terminal system as the live operator surface: blue header rails, hard borders, mono controls, and one accountable step card at a time.
-            </p>
-          </section>
-
           <SharedSetupProgress
             steps={STEP_ORDER.map((step) => ({
               key: step,
@@ -479,45 +466,28 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
           />
 
           <section className="rail-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">OPS</span>
-                <span className="card-eyebrow">Operator Context</span>
-              </div>
-            </div>
             <dl className="metric-list compact">
               <div className="metric-row"><dt>User</dt><dd>{actor.displayName || 'Unknown operator'}</dd></div>
               <div className="metric-row"><dt>Email</dt><dd>{actor.email || 'local mode'}</dd></div>
               <div className="metric-row"><dt>Persistence</dt><dd>{persistence.mode || 'unknown'}</dd></div>
               <div className="metric-row"><dt>Workspace</dt><dd>{status?.workspace?.title || 'pending'}</dd></div>
-              <div className="metric-row"><dt>Liveblocks room</dt><dd>{status?.workspace?.liveblocksRoom || 'pending'}</dd></div>
+              <div className="metric-row"><dt>Room</dt><dd>{status?.workspace?.liveblocksRoom || 'pending'}</dd></div>
             </dl>
           </section>
 
           {error ? (
             <section className="rail-card">
-              <div className="card-head">
-                <div className="card-head-l">
-                  <span className="act-chip">ERR</span>
-                  <span className="card-eyebrow">Setup Alert</span>
-                </div>
-              </div>
               <InfoPanel tone="error">{error}</InfoPanel>
             </section>
           ) : null}
 
           {message ? (
             <section className="rail-card">
-              <div className="card-head">
-                <div className="card-head-l">
-                  <span className="act-chip">OK</span>
-                  <span className="card-eyebrow">Setup Update</span>
-                </div>
-              </div>
               <InfoPanel tone="success">{message}</InfoPanel>
             </section>
           ) : null}
             </aside>
+            )}
 
             <section className="terminal-stage setup-stage">
               {activeStep}

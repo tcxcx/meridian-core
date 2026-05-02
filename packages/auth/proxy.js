@@ -1,9 +1,14 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 
+const isPublicRoute = createRouteMatcher([
+  '/',
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+  '/icon.svg',
+])
 const isProtectedPageRoute = createRouteMatcher(['/setup(.*)'])
 const isProtectedApiRoute = createRouteMatcher(['/api/(.*)'])
-const isAuthRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
 
 function sanitizeReturnBackUrl(request) {
   const url = request.nextUrl.clone()
@@ -13,6 +18,32 @@ function sanitizeReturnBackUrl(request) {
     }
   }
   return url.toString()
+}
+
+function hasClerkHandshakeParams(request) {
+  return [...request.nextUrl.searchParams.keys()].some((key) => key.startsWith('__clerk'))
+}
+
+function scrubClerkCookies(request, response) {
+  const host = request.nextUrl.hostname
+  for (const cookie of request.cookies.getAll()) {
+    if (
+      cookie.name.startsWith('__clerk')
+      || cookie.name.startsWith('__client_uat')
+      || cookie.name.startsWith('__session')
+      || cookie.name.startsWith('__refresh')
+    ) {
+      response.cookies.delete(cookie.name)
+      response.cookies.set(cookie.name, '', { path: '/', maxAge: 0 })
+      if (host === 'localhost') {
+        response.cookies.set(cookie.name, '', { path: '/', domain: 'localhost', maxAge: 0 })
+      }
+      if (host === '127.0.0.1') {
+        response.cookies.set(cookie.name, '', { path: '/', domain: '127.0.0.1', maxAge: 0 })
+      }
+    }
+  }
+  return response
 }
 
 function toLocalSignInRedirect(request) {
@@ -47,11 +78,12 @@ export function authMiddleware() {
   )
 
   const handler = clerkMiddleware(async (auth, request) => {
+    if (isPublicRoute(request)) {
+      return NextResponse.next()
+    }
+
     const session = await auth()
     const { userId } = session
-    if (userId && isAuthRoute(request)) {
-      return NextResponse.redirect(new URL('/setup', request.url))
-    }
 
     if (!userId && isProtectedApiRoute(request)) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
@@ -72,8 +104,9 @@ export function authMiddleware() {
     try {
       return await handler(request, event)
     } catch (error) {
-      if ([...request.nextUrl.searchParams.keys()].some((key) => key.startsWith('__clerk'))) {
-        return NextResponse.redirect(new URL(sanitizeReturnBackUrl(request)))
+      if (hasClerkHandshakeParams(request)) {
+        const response = NextResponse.redirect(new URL(sanitizeReturnBackUrl(request)))
+        return scrubClerkCookies(request, response)
       }
       throw error
     }

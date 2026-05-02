@@ -35,10 +35,10 @@ function DepositDialog({ open, onClose, capitalPlane }) {
   return (
     <DialogShell open={open} onClose={onClose} title="Deposit" subtitle="Circle Gateway">
       <p className="msk-copy">
-        Sendero’s Gateway pattern starts here: deposit USDC into the unified balance, then materialize liquidity only when the swarm wants to trade on Polygon.
+        Add USDC to the treasury balance.
       </p>
       <div className="msk-note-block">
-        <div className="msk-note-title">Unified balance targets</div>
+        <div className="msk-note-title">Targets</div>
         <ul className="msk-list">
           {domainRows.map((item) => (
             <li key={item.key}>
@@ -48,11 +48,11 @@ function DepositDialog({ open, onClose, capitalPlane }) {
         </ul>
       </div>
       <div className="msk-link-row">
-        <a className="msk-link-btn" href="https://www.circle.com/gateway" target="_blank" rel="noreferrer">Gateway docs</a>
-        <a className="msk-link-btn" href="https://developers.circle.com" target="_blank" rel="noreferrer">Circle wallet docs</a>
+        <a className="msk-link-btn" href="https://www.circle.com/gateway" target="_blank" rel="noreferrer">Gateway</a>
+        <a className="msk-link-btn" href="https://developers.circle.com" target="_blank" rel="noreferrer">Wallets</a>
       </div>
       <ResultBanner tone="info">
-        Treasury reserve: {formatUsd(capitalPlane?.treasury?.gateway_balance_usdc || 0)} · Trading target: {formatUsd(capitalPlane?.trading?.target_balance_usdc || 0)}
+        Reserve {formatUsd(capitalPlane?.treasury?.gateway_balance_usdc || 0)} · Target {formatUsd(capitalPlane?.trading?.target_balance_usdc || 0)}
       </ResultBanner>
     </DialogShell>
   )
@@ -107,16 +107,16 @@ function SendDialog({ open, onClose, capitalPlane }) {
   return (
     <DialogShell open={open} onClose={onClose} title="Send" subtitle="Treasury / trading rail">
       <p className="msk-copy">
-        Same-chain send now prefers Miroshark’s Polygon-first treasury path. Use the trading scope only when you want the 1–5% deployment policy guardrail enforced.
+        Send USDC or EURC.
       </p>
       <div className="msk-balance-grid">
-        <span>Deployable now</span>
+        <span>Deployable</span>
         <strong>{formatUsd(balance?.spendableAvailable || 0)}</strong>
-        <span>Tracked total</span>
+        <span>Total</span>
         <strong>{formatUsd(balance?.grandTotal || 0)}</strong>
-        <span>Treasury source</span>
+        <span>Source</span>
         <strong>{capitalPlane?.treasury?.funding_mode || balance?.treasuryFundingMode || 'unknown'}</strong>
-        <span>Legacy Circle</span>
+        <span>Fallback</span>
         <strong>{balance?.legacyCircleTreasuryAddress ? 'fallback only' : 'none'}</strong>
       </div>
       <div className="msk-field">
@@ -156,7 +156,7 @@ function SendDialog({ open, onClose, capitalPlane }) {
           {result.detail || `${result.state} ${result.token} transfer prepared`}
         </ResultBanner>
       ) : null}
-      <ActionButton disabled={busy} onClick={submit}>{busy ? 'Submitting…' : scope === 'treasury' ? 'Send from treasury rail' : 'Send from trading wallet'}</ActionButton>
+      <ActionButton disabled={busy} onClick={submit}>{busy ? 'Sending…' : 'Send'}</ActionButton>
     </DialogShell>
   )
 }
@@ -193,7 +193,7 @@ function BridgeDialog({ open, onClose, capitalPlane }) {
   return (
     <DialogShell open={open} onClose={onClose} title="Bridge" subtitle="Circle Gateway">
       <p className="msk-copy">
-        This is the Sendero Gateway rail adapted for Miroshark: treasury funding is Polygon-first, while the sponsor settlement hook still lives on Arbitrum Sepolia.
+        Move USDC between rails.
       </p>
       <div className="msk-route-card">
         <span>{routeLabel}</span>
@@ -204,16 +204,16 @@ function BridgeDialog({ open, onClose, capitalPlane }) {
         <input className="msk-input" value={amount} onChange={(event) => setAmount(event.target.value.replace(/[^0-9.]/g, ''))} inputMode="decimal" />
       </div>
       <div className="msk-field">
-        <label>Destination recipient on Polygon</label>
-        <input className="msk-input" value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="optional 0x recipient override" />
+        <label>Recipient</label>
+        <input className="msk-input" value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="optional 0x" />
       </div>
       {error ? <ResultBanner tone="err">{error}</ResultBanner> : null}
       {result ? (
         <ResultBanner tone="ok">
-          Bridge submitted. {Array.isArray(result.steps) ? `${result.steps.length} step${result.steps.length === 1 ? '' : 's'}.` : ''}
+          Submitted. {Array.isArray(result.steps) ? `${result.steps.length} step${result.steps.length === 1 ? '' : 's'}.` : ''}
         </ResultBanner>
       ) : null}
-      <ActionButton disabled={busy} onClick={submit}>{busy ? 'Bridging…' : 'Bridge into trading rail'}</ActionButton>
+      <ActionButton disabled={busy} onClick={submit}>{busy ? 'Bridging…' : 'Bridge'}</ActionButton>
     </DialogShell>
   )
 }
@@ -250,10 +250,10 @@ function SwapDialog({ open, onClose, capitalPlane }) {
   return (
     <DialogShell open={open} onClose={onClose} title="Swap" subtitle="Hedge rail">
       <p className="msk-copy">
-        Sendero’s swap UX lives here now. In Miroshark, treasury swaps rebalance the Polygon-side reserve and trading swaps stay under deployable-budget discipline.
+        Rebalance inventory.
       </p>
       <div className="msk-balance-grid">
-        <span>Funding mode</span>
+        <span>Mode</span>
         <strong>{capitalPlane?.treasury?.funding_mode || 'unknown'}</strong>
         <span>Scope</span>
         <strong>{scope}</strong>
@@ -299,7 +299,7 @@ function SwapDialog({ open, onClose, capitalPlane }) {
       </div>
       {error ? <ResultBanner tone="err">{error}</ResultBanner> : null}
       {result ? <ResultBanner tone="info">{result.detail || 'Swap queued'}</ResultBanner> : null}
-      <ActionButton disabled={busy} onClick={submit}>{busy ? 'Preparing…' : scope === 'treasury' ? 'Swap treasury reserve' : 'Swap trading inventory'}</ActionButton>
+      <ActionButton disabled={busy} onClick={submit}>{busy ? 'Preparing…' : 'Swap'}</ActionButton>
     </DialogShell>
   )
 }
@@ -313,6 +313,8 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
   const [sessionBusy, setSessionBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [passkeyEmail, setPasskeyEmail] = useState('')
+  const [deviceLabel, setDeviceLabel] = useState('Passkey')
 
   useEffect(() => {
     if (!open) return
@@ -324,6 +326,7 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
       if (cancelled) return
       setConfig(configPayload)
       setPlan(planPayload)
+      setPasskeyEmail((current) => current || configPayload?.actor?.email || '')
     }).catch((err) => {
       if (!cancelled) setError(err instanceof Error ? err.message : String(err))
     })
@@ -331,6 +334,11 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
       cancelled = true
     }
   }, [open])
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return
+    setDeviceLabel(/Mac|iPhone|iPad/.test(navigator.userAgent) ? 'Apple Passkey' : 'Device passkey')
+  }, [])
 
   const updateWeight = (signerId, nextWeight) => {
     setPlan((current) => {
@@ -442,23 +450,12 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
   }
 
   const createPasskey = async () => {
-    if (config?.circle?.modularChain === 'Polygon') {
-      const proceed = typeof window === 'undefined'
-        ? false
-        : window.confirm('Mainnet provisioning is enabled for the Polygon treasury. Continue to create the production treasury signer and smart account on mainnet?')
-      if (!proceed) return
-    }
     setPasskeyBusy(true)
     setError('')
     setMessage('')
     try {
-      const recoveryAddress = typeof window !== 'undefined'
-        ? window.prompt('Optional recovery address for the treasury smart account', '') || ''
-        : ''
-
       const wallet = await createTreasurySmartAccount({
-        label: 'Miroshark Treasury',
-        recoveryAddress: recoveryAddress.trim() || undefined,
+        label: passkeyEmail || config?.actor?.email || 'Miroshark Treasury',
         agentWalletAddress: config?.agentWalletAddress || undefined,
       })
 
@@ -496,6 +493,10 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
       const message = err instanceof Error ? err.message : String(err)
       if (message.includes('AbortError') || message.includes('NotAllowedError')) {
         setMessage('Passkey creation cancelled.')
+      } else if (message.includes('username is duplicated')) {
+        setError('Circle already used that passkey username. Refresh and try again; new attempts now use a unique internal name.')
+      } else if (message.includes('relying party ID') || message.includes('webauthn')) {
+        setError(`Passkey domain mismatch. This Circle client key must use passkey domain "${expectedRpId}".`)
       } else {
         setError(message)
       }
@@ -512,7 +513,7 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
     if (config?.circle?.modularChain === 'Polygon') {
       const proceed = typeof window === 'undefined'
         ? false
-        : window.confirm('Mainnet provisioning is enabled for the Polygon treasury. Reconnect this production treasury passkey session on mainnet?')
+        : window.confirm('Reconnect Polygon mainnet treasury?')
       if (!proceed) return
     }
 
@@ -520,11 +521,21 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
     setError('')
     setMessage('')
     try {
-      const credential = await loginTreasuryCredential({ label: 'Miroshark Treasury' })
+      const credentialUsername = config?.wallet?.credentialUsername
+        || sessionState?.credentialUsername
+        || config?.credentials?.find((item) => item.id === config?.wallet?.credentialId)?.username
+        || 'Miroshark Treasury'
+      const savedCredential = config?.credentials?.find((item) => item.id === config?.wallet?.credentialId)
+      const credential = await loginTreasuryCredential({
+        label: credentialUsername,
+        credentialId: config?.wallet?.credentialId || savedCredential?.id,
+        publicKey: config?.wallet?.publicKey || savedCredential?.publicKey,
+        rpId: savedCredential?.rpId || config?.rpId,
+      })
       const wallet = await connectTreasurySmartAccount({
         credential,
         walletAddress: config.wallet.walletAddress,
-        label: 'Miroshark Treasury',
+        label: credentialUsername,
         agentWalletAddress: config?.agentWalletAddress || undefined,
       })
 
@@ -534,6 +545,7 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
         body: JSON.stringify({
           ...wallet,
           credentialId: credential.id,
+          credentialUsername,
         }),
       })
       const sessionPayload = await sessionResponse.json()
@@ -582,197 +594,91 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
     }
   }
 
-  const passkeyCount = config?.credentials?.length || 0
   const walletState = config?.wallet
   const sessionState = config?.session
-  const isMainnetProvisioning = config?.circle?.mainnetProvisioning || config?.circle?.modularChain === 'Polygon'
   const plannedAgentWallet = walletState?.registeredRecipients?.[0] || config?.agentWalletAddress || null
-  const signers = plan?.signers || []
+  const browserHost = typeof window === 'undefined' ? '' : window.location.hostname
+  const expectedRpId = config?.rpId || 'localhost'
+  const rpCompatible = config?.rpCompatible !== false
+  const clientReady = Boolean(config?.circle?.clientKeyReady && config?.circle?.clientUrlReady)
+  const normalizedEmail = passkeyEmail.trim()
+  const emailReady = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)
+  const createDisabled = passkeyBusy || !clientReady || !rpCompatible || !emailReady
+  const hostPort = typeof window === 'undefined' ? '3301' : window.location.port
+  const canonicalUrl = `${config?.canonicalOrigin || `http://${expectedRpId}${hostPort ? `:${hostPort}` : ''}`}/setup/treasury`
+  const walletPreview = walletState?.walletAddress
+    ? `${walletState.walletAddress.slice(0, 10)}…${walletState.walletAddress.slice(-6)}`
+    : ''
+  const agentPreview = plannedAgentWallet
+    ? `${plannedAgentWallet.slice(0, 10)}…${plannedAgentWallet.slice(-6)}`
+    : ''
 
   const content = (
-    <>
-      <p className="msk-copy">
-        This ceremony now follows the actual desk-v1 private-multisig pattern: bootstrap yourself as the personal signer, invite the other humans by email, then provision the treasury MSCA and expand the passkey set after deployment.
-      </p>
-      <div className="msk-balance-grid">
-        <span>Circle client key</span>
-        <strong>{config?.circle?.clientKeyReady ? 'ready' : 'missing'}</strong>
-        <span>Circle client URL</span>
-        <strong>{config?.circle?.clientUrlReady ? 'ready' : 'missing'}</strong>
-        <span>Passkey domain</span>
-        <strong>{config?.rpId || 'pending'}</strong>
-        <span>Registered passkeys</span>
-        <strong>{passkeyCount}</strong>
+    <div className="treasury-zen">
+      <div className="treasury-zen-intro">
+        <div className="treasury-zen-state">{walletState?.walletAddress ? 'passkey ready' : 'email + this device'}</div>
+        <h3 className="treasury-zen-title">Create passkey</h3>
+        <p className="treasury-zen-copy">
+          {walletState?.walletAddress
+            ? 'Your treasury wallet is protected by this device.'
+            : 'Use your email and this device to protect the treasury wallet.'}
+        </p>
       </div>
-      {isMainnetProvisioning ? (
-        <ResultBanner tone="info">
-          Mainnet provisioning is active. This ceremony provisions the Polygon treasury signer and smart account for production treasury control.
-        </ResultBanner>
-      ) : null}
-      {config?.circle?.downgradedToTestnet ? (
-        <ResultBanner tone="info">
-          The configured Circle key is a test client key, so this ceremony is using Polygon Amoy testnet. Use a `LIVE_CLIENT_KEY` to provision a Polygon mainnet treasury.
-        </ResultBanner>
-      ) : null}
-      <div className="msk-note-block">
-        <div className="msk-note-title">Circle smart treasury</div>
-        <div className="msk-balance-grid">
-          <span>Wallet address</span>
-          <strong>{walletState?.walletAddress ? `${walletState.walletAddress.slice(0, 10)}…${walletState.walletAddress.slice(-6)}` : 'pending'}</strong>
-          <span>Active chain</span>
-          <strong>{walletState?.chain || config?.circle?.modularChain || 'pending'}</strong>
-          <span>Recovery</span>
-          <strong>{walletState?.recoveryRegistered ? 'registered' : 'optional'}</strong>
-          <span>Passkey session</span>
-          <strong>{sessionState?.connectedAt ? 'connected' : 'idle'}</strong>
-          <span>Registry plugin</span>
-          <strong>{walletState?.addressBookInstalled ? 'installed' : 'pending'}</strong>
-          <span>Agent wallet</span>
-          <strong>{plannedAgentWallet ? `${plannedAgentWallet.slice(0, 10)}…${plannedAgentWallet.slice(-6)}` : 'missing'}</strong>
-        </div>
-        {plannedAgentWallet ? (
-          <div className="msk-mini-copy">
-            Initial registered recipients: {walletState?.registeredRecipients?.length ? walletState.registeredRecipients.join(', ') : plannedAgentWallet}
-          </div>
-        ) : null}
-      </div>
-      <div className="msk-note-block">
-        <div className="msk-note-title">Signer plan</div>
-        <div className="msk-weight-stack">
-          {signers.map((signer) => (
-            <label key={signer.id} className="msk-weight-row">
-              <div className="msk-weight-head">
-                <span>{signer.label}</span>
-                <span>{weightToPct(plan?.weights?.[signer.id] || 0)}%</span>
-              </div>
-              <div className="msk-dual-grid">
-                <input
-                  className="msk-input"
-                  value={signer.label}
-                  onChange={(event) => updateSigner(signer.id, { label: event.target.value })}
-                  disabled={signer.isBootstrap}
-                  placeholder="Signer label"
-                />
-                <input
-                  className="msk-input"
-                  value={signer.email || ''}
-                  onChange={(event) => updateSigner(signer.id, { email: event.target.value.trim().toLowerCase(), status: 'draft' })}
-                  disabled={signer.isBootstrap}
-                  placeholder="name@example.com"
-                />
-              </div>
-              <div className="msk-dual-grid">
-                <select
-                  className="msk-input"
-                  value={signer.role}
-                  disabled={signer.isBootstrap}
-                  onChange={(event) => updateSigner(signer.id, { role: event.target.value, status: signer.status === 'accepted' ? 'accepted' : 'draft' })}
-                >
-                  {SIGNER_ROLE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <input
-                  className="msk-input"
-                  value={
-                    signer.isBootstrap
-                      ? 'Bootstrap owner'
-                      : signer.status === 'accepted'
-                        ? 'Accepted'
-                        : signer.status === 'invited'
-                          ? 'Invitation sent'
-                          : signer.role === 'recovery'
-                            ? 'Recovery signer'
-                            : 'Pending invite'
-                  }
-                  readOnly
-                />
-              </div>
+
+      <div className="treasury-zen-panel">
+        {!walletState?.walletAddress ? (
+          <div className="treasury-passkey-form">
+            <label className="treasury-passkey-field">
+              <span>Email</span>
               <input
-                type="range"
-                min="0"
-                max="1000"
-                step="50"
-                value={plan?.weights?.[signer.id] || 0}
-                onChange={(event) => updateWeight(signer.id, event.target.value)}
-                disabled={signer.role === 'member'}
+                value={passkeyEmail}
+                onChange={(event) => setPasskeyEmail(event.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                inputMode="email"
               />
-              <span className="msk-mini-copy">
-                {signer.role} · {signer.email || 'email required'}{signer.invitedAt ? ` · invited ${new Date(signer.invitedAt).toLocaleDateString()}` : ''}
-              </span>
-              <div className="msk-btn-row">
-                {!signer.isBootstrap ? (
-                  <>
-                    <SecondaryButton
-                      disabled={inviteBusyId === signer.id || !signer.email}
-                      onClick={() => sendInvite(signer.id)}
-                    >
-                      {inviteBusyId === signer.id ? 'Inviting…' : signer.status === 'invited' ? 'Re-send invite' : 'Send invite'}
-                    </SecondaryButton>
-                    <SecondaryButton onClick={() => removeSigner(signer.id)}>
-                      Remove
-                    </SecondaryButton>
-                  </>
-                ) : (
-                  <span className="msk-mini-copy">This signer is you. It becomes the bootstrap passkey on this device.</span>
-                )}
-              </div>
             </label>
-          ))}
-        </div>
-        <div className="msk-threshold-row">
-          <span>Threshold</span>
-          <strong>{plan?.thresholdPct || 0}% · {plan?.threshold || 0}/{plan?.totalWeight || 0}</strong>
-        </div>
-        <div className="msk-btn-row">
-          <SecondaryButton onClick={() => addSigner('admin')}>Add signer</SecondaryButton>
-          <SecondaryButton onClick={() => addSigner('recovery')}>Add recovery</SecondaryButton>
-          <SecondaryButton onClick={rebalance}>Rebalance equally</SecondaryButton>
-          <SecondaryButton disabled={busy} onClick={savePlan}>{busy ? 'Saving…' : 'Save signer plan'}</SecondaryButton>
-        </div>
-      </div>
-      <div className="msk-note-block">
-        <div className="msk-note-title">Passkey ceremony</div>
-        <ul className="msk-list">
-          <li>Save the signer plan, then send the email invites for each non-bootstrap signer.</li>
-          <li>Create the Circle smart treasury with your bootstrap passkey on this device.</li>
-          <li>Recovery signers join later through their invite and can be weighted before funds move.</li>
-          <li>Reconnect with WebAuthn login later instead of registering a new owner.</li>
-        </ul>
-        <div className="msk-btn-row">
-          <ActionButton disabled={passkeyBusy} onClick={createPasskey}>
-            {passkeyBusy
-              ? 'Creating…'
-              : isMainnetProvisioning
-                ? 'Provision Polygon mainnet treasury'
-                : 'Create Circle passkey + smart account'}
-          </ActionButton>
-          <SecondaryButton disabled={sessionBusy || !walletState?.walletAddress} onClick={reconnectPasskey}>
-            {sessionBusy ? 'Reconnecting…' : isMainnetProvisioning ? 'Reconnect mainnet treasury passkey' : 'Reconnect existing passkey'}
-          </SecondaryButton>
-          <SecondaryButton disabled={sessionBusy || !sessionState?.connectedAt} onClick={clearSession}>
-            Clear session
-          </SecondaryButton>
-        </div>
-        {sessionState?.connectedAt ? (
-          <div className="msk-mini-copy">
-            Active session since {new Date(sessionState.connectedAt).toLocaleString()}.
+            <div className="treasury-device-line">
+              <span>This device</span>
+              <strong>{deviceLabel}</strong>
+            </div>
           </div>
         ) : null}
-        {config?.credentials?.length ? (
-          <div className="msk-credential-list">
-            {config.credentials.map((credential) => (
-              <div key={credential.id} className="msk-credential-item">
-                <span>{credential.id}</span>
-                <span>{credential.createdAt ? new Date(credential.createdAt).toLocaleString() : 'saved'}</span>
-              </div>
-            ))}
+
+        {!rpCompatible ? (
+          <p className="treasury-zen-alert">
+            Open on {expectedRpId}, not {browserHost || config?.currentHost || 'this host'}.
+            {' '}<a href={canonicalUrl}>Switch</a>
+          </p>
+        ) : null}
+        {!clientReady ? (
+          <p className="treasury-zen-alert">Circle modular client key or client URL is missing.</p>
+        ) : null}
+
+        <div className="treasury-zen-actions">
+          {!walletState?.walletAddress ? (
+            <ActionButton disabled={createDisabled} onClick={createPasskey}>
+              {passkeyBusy ? 'Creating…' : 'Create passkey'}
+            </ActionButton>
+          ) : (
+            <SecondaryButton disabled={sessionBusy || !walletState?.walletAddress} onClick={reconnectPasskey}>
+              {sessionBusy ? 'Connecting…' : sessionState?.connectedAt ? 'Connected' : 'Reconnect'}
+            </SecondaryButton>
+          )}
+        </div>
+
+        {walletPreview ? (
+          <div className="treasury-zen-meta">
+            <span>{walletPreview}</span>
+            <span>{walletState?.chain || config?.circle?.modularChain || 'Polygon'}</span>
           </div>
         ) : null}
+        {agentPreview ? <div className="treasury-zen-muted">Agent {agentPreview}</div> : null}
+        {config?.circle?.downgradedToTestnet ? <div className="treasury-zen-muted">Polygon Amoy</div> : null}
+        {error ? <p className="treasury-zen-error">{error}</p> : null}
+        {message ? <p className="treasury-zen-ok">{message}</p> : null}
       </div>
-      {error ? <ResultBanner tone="err">{error}</ResultBanner> : null}
-      {message ? <ResultBanner tone="ok">{message}</ResultBanner> : null}
-    </>
+    </div>
   )
 
   if (embedded) {
@@ -780,7 +686,7 @@ export function TreasurySetupPanel({ open = true, onClose = () => {}, embedded =
   }
 
   return (
-    <DialogShell open={open} onClose={onClose} title="Treasury Setup" subtitle="Passkey + weighted multisig">
+    <DialogShell open={open} onClose={onClose} title="Treasury" subtitle="Passkey + signers">
       {content}
     </DialogShell>
   )

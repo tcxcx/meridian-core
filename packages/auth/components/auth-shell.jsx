@@ -4,17 +4,10 @@ import Link from 'next/link'
 
 import { MirosharkUnicornScene } from '../../ui/src/components/unicorn-scene.jsx'
 
-const SETUP_FLOW = [
-  ['01', 'Workspace shell', 'Create the private room, operator identity, and shared control plane.'],
-  ['02', 'Treasury custody', 'Provision the Polygon treasury with passkeys, weighted signers, and recovery.'],
-  ['03', 'Trading rail', 'Confirm the agent wallet, deployable budget, and Polygon Amoy funding route.'],
-  ['04', 'External operator', 'Attach OpenClaw only after policy and custody are explicit.'],
-]
-
-const PROOF_POINTS = [
-  ['Execution surface', 'One command-driven terminal from landing through launch.'],
-  ['Wallet model', 'Treasury first, trading second, automation last.'],
-  ['Capital thesis', 'Swarm research exists to improve ROI, not decorate the product.'],
+const ENTRY_POINTS = [
+  'One console for signals, wallets, and trades.',
+  'Treasury and trading stay separated.',
+  'OpenClaw connects after setup.',
 ]
 
 function AuthFallback({ children }) {
@@ -32,13 +25,12 @@ export function AuthUnavailable() {
   return (
     <AuthShell
       mode="setup locked"
-      title="Clerk is not configured for this app instance."
-      description="Add the Clerk publishable and secret keys for the authenticated app before running the private operator flow."
-      asideTitle="Private entry depends on authenticated custody."
+      title="Auth not configured."
+      description="Add Clerk keys to continue."
     >
       <AuthFallback>
         <p className="auth-unavailable-copy">
-          The sign-in surface cannot boot until the Clerk environment is present for this app.
+          Clerk env missing.
         </p>
       </AuthFallback>
     </AuthShell>
@@ -49,7 +41,6 @@ export function AuthShell({
   mode,
   title,
   description,
-  asideTitle,
   children,
 }) {
   const marketingOrigin = process.env.NEXT_PUBLIC_MARKETING_URL || 'http://127.0.0.1:3302'
@@ -61,7 +52,7 @@ export function AuthShell({
           <header className="auth-header">
             <div className="auth-brand-block">
               <div className="auth-brand-mark">MiroShark</div>
-              <div className="auth-brand-sub">private operator entry for graph-native prediction market trading</div>
+              <div className="auth-brand-sub">private operator entry</div>
             </div>
             <nav className="auth-nav" aria-label="Authentication routes">
               <Link className="auth-nav-link" href="/sign-in">Sign in</Link>
@@ -80,44 +71,21 @@ export function AuthShell({
               <h1 className="auth-title">{title}</h1>
               <p className="auth-copy">{description}</p>
 
-              <div className="auth-proof-grid">
-                {PROOF_POINTS.map(([label, copy], index) => (
-                  <article className="auth-proof-card auth-reveal" data-step={String(index + 2)} key={label}>
-                    <div className="auth-proof-label">{label}</div>
-                    <p>{copy}</p>
-                  </article>
+              <div className="auth-plain-points">
+                {ENTRY_POINTS.map((point) => (
+                  <span key={point}>{point}</span>
                 ))}
               </div>
             </section>
 
-            <section className="auth-stage auth-reveal" data-step="3">
-              <div className="auth-stage-rail">
-                <div className="auth-route-card">
-                  <div className="auth-route-head">
-                    <span className="auth-card-kicker">Setup route</span>
-                    <span className="auth-route-head-r">/setup</span>
-                  </div>
-                  <h2 className="auth-route-title">{asideTitle}</h2>
-                  <div className="auth-route-list">
-                    {SETUP_FLOW.map(([index, label, copy]) => (
-                      <div className="auth-route-item" key={index}>
-                        <span className="auth-step-index">{index}</span>
-                        <div className="auth-route-body">
-                          <strong>{label}</strong>
-                          <span>{copy}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <div className="auth-card-wrap">{children}</div>
+            <section className="auth-card-wrap auth-reveal" data-step="2">
+              {children}
             </section>
           </main>
 
           <footer className="auth-footer-note">
-            <span>MiroShark design system: blue-command brutalism, financial density, swarm theater.</span>
-            <span>Auth, setup, and terminal use the same scene and grammar.</span>
+            <span>MiroShark</span>
+            <span>Auth. Setup. Terminal.</span>
           </footer>
         </div>
       </div>

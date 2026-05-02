@@ -117,6 +117,7 @@ export default function GraphPanel({
     })
     return Object.values(typeMap)
   }, [graphData])
+  const hasGraphNodes = Boolean(graphData?.nodes?.length)
 
   useEffect(() => {
     if (wasSimulatingRef.current && !isSimulating) {
@@ -604,13 +605,13 @@ export default function GraphPanel({
       </div>
 
       <div className="graph-container" ref={containerRef}>
-        {graphData ? (
+        {hasGraphNodes ? (
           <div className="graph-view">
             <svg ref={svgRef} className="graph-svg" />
 
             {(currentPhase === 1 || isSimulating) && (
               <div className="graph-hint">
-                {isSimulating ? 'Swarm memory is updating in real time' : 'Graph is rebuilding from live operator context'}
+                {isSimulating ? 'Swarm updating' : 'Graph rebuilding'}
               </div>
             )}
 
@@ -625,7 +626,7 @@ export default function GraphPanel({
               <div className="graph-detail-panel">
                 <div className="graph-detail-head">
                   <span>
-                    {selectedItem.type === 'selection' ? 'Selection' : selectedItem.type === 'node' ? 'Node Details' : 'Relationship'}
+                    {selectedItem.type === 'selection' ? 'Selection' : selectedItem.type === 'node' ? 'Node' : 'Edge'}
                   </span>
                   <button onClick={clearGraphSelection}>×</button>
                 </div>
@@ -683,11 +684,11 @@ export default function GraphPanel({
         ) : loading ? (
           <div className="graph-state">Loading swarm graph…</div>
         ) : (
-          <div className="graph-state">Waiting for graph context…</div>
+          <div className="graph-state">Waiting for live swarm data…</div>
         )}
       </div>
 
-      {graphData && entityTypes.length ? (
+      {hasGraphNodes && entityTypes.length ? (
         <div className="graph-legend">
           <span className="graph-legend-title">Entity Types</span>
           <div className="graph-legend-items">
@@ -701,7 +702,7 @@ export default function GraphPanel({
         </div>
       ) : null}
 
-      {graphData ? (
+      {hasGraphNodes ? (
         <div className="edge-labels-toggle">
           <label className="toggle-switch">
             <input type="checkbox" checked={showEdgeLabels} onChange={(event) => setShowEdgeLabels(event.target.checked)} />

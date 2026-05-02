@@ -31,7 +31,7 @@ export default function WaitlistForm() {
       }
       setStatus({
         type: 'success',
-        message: 'Access request queued. We saved your email and operator note for this workspace.',
+        message: 'Request queued.',
       })
       setForm(INITIAL_FORM)
     } catch (error) {
@@ -78,19 +78,19 @@ export default function WaitlistForm() {
         />
       </label>
       <label className="mw-form-label">
-        What do you want the setup to control?
+        Goal
         <textarea
           className="mw-textarea"
           value={form.note}
           onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))}
-          placeholder="Treasury passkeys, agent wallet policy, Polygon Amoy funding, OpenClaw operator..."
+          placeholder="Treasury, agent wallet, OpenClaw..."
         />
       </label>
       <button className="mw-submit" type="submit" disabled={busy}>
         {busy ? 'Queueing…' : 'Join waitlist'}
       </button>
       <p className="mw-form-note">
-        This is a private operator product. The waitlist is an access request queue, not a public marketing funnel.
+        Private operator access only.
       </p>
       {status.message ? (
         <p className={`mw-form-status ${status.type === 'success' ? 'is-success' : 'is-error'}`}>

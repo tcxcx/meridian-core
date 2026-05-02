@@ -90,7 +90,10 @@ export function createFheRoutes(): FheRoutes {
     if (initPromise) return initPromise;
     initPromise = (async () => {
       try {
-        await client.connect(publicClient, walletClient);
+        await client.connect(
+          publicClient as unknown as Parameters<typeof client.connect>[0],
+          walletClient as unknown as Parameters<typeof client.connect>[1],
+        );
       } catch (error) {
         initPromise = null; // allow retry on next call
         live = false;

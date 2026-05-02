@@ -15,7 +15,7 @@ const sans = Space_Grotesk({
 
 export const metadata = {
   title: 'MiroShark',
-  description: 'Prediction-market hedge fund operator built around swarm analysis, treasury custody, and graph-native execution.',
+  description: 'Prediction market hedge fund terminal.',
 }
 
 export default function RootLayout({ children }) {

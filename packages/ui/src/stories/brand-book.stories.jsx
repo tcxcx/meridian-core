@@ -24,12 +24,12 @@ export const Overview = {
       ]}
       rail={
         <>
-          <TerminalCard chip="DNA" eyebrow="Brand Principles" title="What MiroShark should feel like">
+          <TerminalCard chip="DNA" eyebrow="Principles" title="MiroShark">
             <ul className="ms-demo-stack">
               {mirosharkBrand.principles.map((item) => <li key={item}>{item}</li>)}
             </ul>
           </TerminalCard>
-          <TerminalCard chip="COL" eyebrow="Color System" title="Single-voltage command palette">
+          <TerminalCard chip="COL" eyebrow="Color" title="Command palette">
             <SummaryGrid
               items={Object.entries(mirosharkBrand.colors).map(([label, value]) => [label, value])}
             />
@@ -42,7 +42,7 @@ export const Overview = {
             chip="ACT 0"
             eyebrow="Overview"
             right="operator-first"
-            title="Graph-native swarm trading terminal"
+            title="Swarm trading terminal"
             copy={mirosharkBrand.description}
           >
             <SummaryGrid
@@ -65,4 +65,3 @@ export const Overview = {
     />
   ),
 }
-

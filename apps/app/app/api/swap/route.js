@@ -46,7 +46,7 @@ export async function POST(request) {
       return NextResponse.json(
         {
           error: 'swap_chain_unsupported',
-          message: `Circle App Kit same-chain swap is not available on ${chainConfig.appKitChain}. Use Polygon mainnet or Arc_Testnet via MIROSHARK_SWAP_CHAIN.`,
+          message: `Circle App Kit same-chain swap is not available on ${chainConfig.appKitChain}. Set MIROSHARK_SWAP_CHAIN=Polygon for mainnet swaps.`,
         },
         { status: 503 },
       )

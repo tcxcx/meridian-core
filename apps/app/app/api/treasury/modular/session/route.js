@@ -49,6 +49,7 @@ export async function POST(request) {
     const chain = String(body?.chain || '').trim()
     const chainId = Number(body?.chainId || 0)
     const credentialId = String(body?.credentialId || '').trim()
+    const credentialUsername = String(body?.credentialUsername || '').trim() || null
 
     if (!ADDRESS_RE.test(walletAddress) || !chain || !chainId || !credentialId) {
       return NextResponse.json(
@@ -62,6 +63,7 @@ export async function POST(request) {
       chain,
       chainId,
       credentialId,
+      credentialUsername,
       connectedAt: new Date().toISOString(),
     }
 

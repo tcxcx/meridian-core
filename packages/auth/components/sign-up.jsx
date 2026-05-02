@@ -1,7 +1,26 @@
 'use client'
 
 import { SignUp } from '@clerk/nextjs'
+import dynamic from 'next/dynamic'
 import { AuthShell, AuthUnavailable, mirosharkClerkAppearance } from './auth-shell'
+
+function SignUpForm() {
+  return (
+    <SignUp
+      appearance={mirosharkClerkAppearance}
+      routing="path"
+      path="/sign-up"
+      oauthFlow="redirect"
+      signInUrl="/sign-in"
+      fallbackRedirectUrl="/setup"
+    />
+  )
+}
+
+const ClientSignUpForm = dynamic(() => Promise.resolve(SignUpForm), {
+  ssr: false,
+  loading: () => <div className="auth-card-skeleton">Loading sign up…</div>,
+})
 
 export function SignUpPage() {
   if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
@@ -10,10 +29,9 @@ export function SignUpPage() {
 
   return (
     <AuthShell
-      mode="Private setup admission"
-      title="Create the operator account before treasury provisioning begins."
-      description="The sign-up route feeds directly into the five-stage setup flow: workspace, treasury, trading, OpenClaw, and launch. No dead-end auth screens."
-      asideTitle="Sendero-style auth entry, but pointed at a wallet ceremony and execution setup that only MiroShark runs."
+      mode="Operator setup"
+      title="Create account."
+      description="Create access, then set wallets."
     >
       <div className="auth-card-shell">
         <div className="auth-card-header">
@@ -21,12 +39,7 @@ export function SignUpPage() {
           <span className="auth-route-head-r">/sign-up</span>
         </div>
         <div className="auth-card-body">
-          <SignUp
-            appearance={mirosharkClerkAppearance}
-            signInUrl={process.env.NEXT_PUBLIC_CLERK_SIGN_IN_URL || '/sign-in'}
-            fallbackRedirectUrl={process.env.NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL || '/setup'}
-            forceRedirectUrl={process.env.NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL || undefined}
-          />
+          <ClientSignUpForm />
         </div>
       </div>
     </AuthShell>

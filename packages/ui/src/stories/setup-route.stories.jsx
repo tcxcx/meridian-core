@@ -30,7 +30,7 @@ export const TreasuryCeremony = {
             complete={{ workspace: true }}
             progress={40}
           />
-          <TerminalCard chip="OPS" eyebrow="Operator Context" title="Support rail only">
+          <TerminalCard chip="OPS" eyebrow="Context" title="Operator">
             <dl className="ms-metric-list">
               <div className="ms-metric-row"><dt>User</dt><dd>owner@miroshark</dd></div>
               <div className="ms-metric-row"><dt>Persistence</dt><dd>database</dd></div>
@@ -44,8 +44,8 @@ export const TreasuryCeremony = {
           chip="Step 2"
           eyebrow="Setup Route"
           right="/setup/treasury"
-          title="Provision treasury custody"
-          copy="The setup route should feel like the live terminal, not a separate onboarding SaaS."
+          title="Treasury"
+          copy="Create custody."
         >
           <SummaryGrid
             items={[
@@ -56,7 +56,7 @@ export const TreasuryCeremony = {
             ]}
           />
           <div className="ms-note" style={{ marginTop: '10px' }}>
-            Bootstrap signer, send Clerk invites, then provision the treasury MSCA. The stage owns the live ceremony.
+            Signer, invites, passkey.
           </div>
           <div className="ms-button-row" style={{ marginTop: '10px' }}>
             <button type="button" className="ms-btn-primary">Provision polygon mainnet treasury</button>
@@ -67,4 +67,3 @@ export const TreasuryCeremony = {
     />
   ),
 }
-

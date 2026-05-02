@@ -81,6 +81,11 @@ export default function WalletGatewayDropdown({
   const tradingAddress = gatewayBalance?.tradingAddress || capitalPlane?.trading?.address || ''
   const treasuryFundingMode = gatewayBalance?.treasuryFundingMode || capitalPlane?.treasury?.funding_mode || 'unknown'
   const identityStateLabel = identity?.registered ? 'registered' : 'unregistered'
+  const identityModeLabel = identity?.status?.onchain
+    ? `onchain · block ${identity?.blockNumber || 'pending'}`
+    : identity?.status?.signerReady
+      ? 'ready to anchor'
+      : 'needs 0G gas'
   const tokenBalance = selectedToken === 'USDC' ? spendableNow : 0
 
   const triggerLabel = useMemo(() => {
@@ -124,7 +129,7 @@ export default function WalletGatewayDropdown({
       >
         <span className="ms-wallet-trigger-mark">◎</span>
         <span className="ms-wallet-trigger-body">
-          <span className="ms-wallet-trigger-name">Business Wallet</span>
+          <span className="ms-wallet-trigger-name">Treasury</span>
           <span className="ms-wallet-trigger-balance">{triggerLabel}</span>
         </span>
         <span className={`ms-wallet-trigger-chevron ${open ? 'is-open' : ''}`}>▾</span>
@@ -135,8 +140,8 @@ export default function WalletGatewayDropdown({
           <div className="ms-wallet-panel-head">
             <div className="ms-wallet-avatar">MS</div>
             <div className="ms-wallet-id">
-              <div className="ms-wallet-id-name">MiroShark Wallet Gateway</div>
-              <div className="ms-wallet-id-meta">{treasuryFundingMode} · treasury {shorten(treasuryAddress)}</div>
+              <div className="ms-wallet-id-name">MiroShark Treasury</div>
+              <div className="ms-wallet-id-meta">{treasuryFundingMode} · {shorten(treasuryAddress, 8, 6)}</div>
             </div>
           </div>
 
@@ -155,13 +160,13 @@ export default function WalletGatewayDropdown({
           </div>
 
           <div className="ms-wallet-balance-card">
-            <div className="ms-wallet-service-kicker">Business Wallet Service</div>
+            <div className="ms-wallet-service-kicker">Gateway balance</div>
             <div className={`ms-wallet-coin ${selectedToken.toLowerCase()}`}>{selectedToken}</div>
             <div className="ms-wallet-amount">
               {selectedToken === 'USDC' ? `$${formatUsd(spendableNow)}` : `${formatUsd(0)} ${selectedToken}`}
             </div>
             <div className="ms-wallet-amount-sub">
-              spendable now · ${formatUsd(trackedTotal)} tracked
+              spendable · ${formatUsd(trackedTotal)} tracked
             </div>
 
             <div className="ms-wallet-actions">
@@ -173,8 +178,8 @@ export default function WalletGatewayDropdown({
           </div>
 
           <div className="ms-wallet-meta-row">
-            <span className="ms-wallet-meta-kicker">Trading wallet</span>
-            <span className="ms-wallet-meta-value">{shorten(tradingAddress)}</span>
+            <span className="ms-wallet-meta-kicker">Agent trading wallet</span>
+            <span className="ms-wallet-meta-value">{shorten(tradingAddress, 8, 6)}</span>
           </div>
 
           <div className="ms-wallet-identity-card">
@@ -188,21 +193,29 @@ export default function WalletGatewayDropdown({
               </span>
             </div>
             <div className="ms-wallet-identity-copy">
-              Register the prediction-market agent against the funded 0G identity wallet so treasury, trading, and swarm memory share one operator-readable identity surface.
+              {identity?.registered
+                ? `Identity anchored ${identityModeLabel}.`
+                : identity?.status?.signerReason || `Ready to anchor: ${identityModeLabel}.`}
             </div>
             <div className="ms-wallet-identity-grid">
-              <div><span>ID</span><strong>{identity?.identityId || 'pending'}</strong></div>
-              <div><span>Identity wallet</span><strong>{shorten(identity?.identityAddress || '')}</strong></div>
-              <div><span>Agent wallet</span><strong>{shorten(identity?.agentWalletAddress || tradingAddress)}</strong></div>
+              <div><span>ID</span><strong>{shorten(identity?.identityId || 'pending', 20, 10)}</strong></div>
+              <div><span>0G wallet</span><strong>{shorten(identity?.identityAddress || '')}</strong></div>
+              <div><span>Agent</span><strong>{shorten(identity?.agentWalletAddress || tradingAddress)}</strong></div>
+              {identity?.txHash ? <div><span>Tx</span><strong>{shorten(identity.txHash)}</strong></div> : null}
             </div>
             {identityError ? <div className="ms-wallet-identity-error">{identityError}</div> : null}
             <div className="ms-wallet-identity-actions">
               <button type="button" className="ms-wallet-mini-btn" onClick={registerIdentity} disabled={identityBusy}>
-                {identityBusy ? 'Registering…' : identity?.registered ? 'Refresh 0G identity' : 'Register 0G agent'}
+                {identityBusy ? 'Anchoring…' : identity?.registered ? 'Refresh identity' : 'Anchor 0G identity'}
               </button>
               {identity?.explorerUrl ? (
                 <a className="ms-wallet-mini-btn alt" href={identity.explorerUrl} target="_blank" rel="noreferrer">
                   View 0G wallet
+                </a>
+              ) : null}
+              {identity?.txUrl ? (
+                <a className="ms-wallet-mini-btn alt" href={identity.txUrl} target="_blank" rel="noreferrer">
+                  View anchor tx
                 </a>
               ) : null}
             </div>

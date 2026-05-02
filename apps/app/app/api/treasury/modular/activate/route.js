@@ -25,6 +25,7 @@ export async function POST(request) {
     const chain = String(body?.chain || '').trim()
     const chainId = Number(body?.chainId || 0)
     const credentialId = String(body?.credentialId || '').trim()
+    const credentialUsername = String(body?.credentialUsername || '').trim() || null
     const publicKey = typeof body?.publicKey === 'string' ? body.publicKey : null
     const recoveryRegistered = Boolean(body?.recoveryRegistered)
     const addressBookInstalled = Boolean(body?.addressBookInstalled)
@@ -50,6 +51,7 @@ export async function POST(request) {
       chain,
       chainId,
       credentialId,
+      credentialUsername,
       publicKey,
       recoveryRegistered,
       addressBookInstalled,
@@ -62,6 +64,7 @@ export async function POST(request) {
     const passkeyState = await readPasskeys()
     const credential = {
       id: credentialId,
+      username: credentialUsername,
       publicKey,
       transports: ['internal'],
       deviceType: 'passkey',

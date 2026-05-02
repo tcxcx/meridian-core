@@ -15,7 +15,7 @@ import { createBundlerClient } from 'viem/account-abstraction'
 import { encodeAbiParameters, encodeFunctionData } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrumSepolia, baseSepolia, polygon, polygonAmoy } from 'viem/chains'
-import { parsePublicKey } from 'webauthn-p256'
+import { createCredential, parsePublicKey, serializePublicKey, sign as signWebAuthn } from 'webauthn-p256'
 
 const ADDRESS_BOOK_MODULE_ADDRESS = '0x0000000d81083B16EA76dfab46B0315B0eDBF3d0'
 const ADDRESS_BOOK_MANIFEST_HASH =
@@ -100,11 +100,60 @@ function getPublicCircleChainName() {
   ).trim()
 }
 
+function toCircleUsername(label, fallback = 'Miroshark_Treasury', options = {}) {
+  const normalized = String(label || fallback)
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_@.:+-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+
+  let username = normalized || fallback
+  if (options.unique) {
+    const suffix = `_${Date.now().toString(36)}`
+    username = `${username.slice(0, Math.max(5, 50 - suffix.length))}${suffix}`
+  }
+  if (username.length < 5) return fallback
+  if (username.length > 50) return username.slice(0, 50).replace(/^_+|_+$/g, '') || fallback
+  return username
+}
+
 function resolveEffectiveCircleChainName(clientKey, requestedChainName) {
   if (String(clientKey || '').startsWith('TEST_CLIENT_KEY:') && requestedChainName === 'Polygon') {
     return 'Polygon_Amoy_Testnet'
   }
   return requestedChainName
+}
+
+function resolveBrowserRpId() {
+  if (typeof window === 'undefined') return 'localhost'
+  return window.location.hostname === '127.0.0.1' ? 'localhost' : window.location.hostname
+}
+
+function toLocalWebAuthnOwner(credential, rpId = resolveBrowserRpId()) {
+  if (!credential?.id) {
+    throw new Error('Passkey credential is missing an id.')
+  }
+  if (!credential?.publicKey) {
+    throw new Error('Passkey credential is missing a public key. Use a platform passkey that exposes P-256 public keys.')
+  }
+  const publicKey = normalizeP256PublicKey(credential.publicKey)
+  return {
+    ...credential,
+    publicKey,
+    rpId,
+    type: 'webAuthn',
+    sign: async ({ hash }) => signWebAuthn({
+      credentialId: credential.id,
+      hash,
+      rpId,
+    }),
+  }
+}
+
+function normalizeP256PublicKey(publicKey) {
+  const parsed = parsePublicKey(publicKey)
+  return serializePublicKey(parsed, { compressed: false })
 }
 
 function getAddressBookDependencies() {
@@ -157,22 +206,49 @@ function resolveAgentWalletRecipients(explicitRecipients = []) {
   return [...new Set(recipients.map((item) => String(item).toLowerCase()))]
 }
 
+function errorMessage(error) {
+  if (!error) return ''
+  const parts = [
+    error.message,
+    error.shortMessage,
+    error.details,
+    error.cause?.message,
+    error.cause?.details,
+  ]
+  return parts.filter(Boolean).join(' ').toLowerCase()
+}
+
+function isAlreadyExistsError(error) {
+  const message = errorMessage(error)
+  return message.includes('already exists') || message.includes('already exist')
+}
+
+function isExecutionRevertError(error) {
+  const message = errorMessage(error)
+  return message.includes('execution reverted') || message.includes('reverted for an unknown reason')
+}
+
 async function registerOwnerAddressMapping(publicClient, account, credential) {
   const rawPublicKey = credential?.publicKey
   if (!rawPublicKey) return []
   const parsed = parsePublicKey(rawPublicKey)
-  return createAddressMapping(publicClient, {
-    walletAddress: account.address,
-    owners: [
-      {
-        type: OwnerIdentifierType.WebAuthn,
-        identifier: {
-          publicKeyX: parsed.x.toString(),
-          publicKeyY: parsed.y.toString(),
+  try {
+    return await createAddressMapping(publicClient, {
+      walletAddress: account.address,
+      owners: [
+        {
+          type: OwnerIdentifierType.WebAuthn,
+          identifier: {
+            publicKeyX: parsed.x.toString(),
+            publicKeyY: parsed.y.toString(),
+          },
         },
-      },
-    ],
-  })
+      ],
+    })
+  } catch (error) {
+    if (isAlreadyExistsError(error)) return []
+    throw error
+  }
 }
 
 async function installAgentWalletRegistry({ account, bundlerClient, recipients }) {
@@ -181,13 +257,24 @@ async function installAgentWalletRegistry({ account, bundlerClient, recipients }
       'No agent trading wallet address is available for registry installation. Set TRADING_WALLET_PRIVATE_KEY, GATEWAY_SIGNER_PRIVATE_KEY, TRADING_WALLET_ADDRESS, or MIROSHARK_AGENT_WALLET_ADDRESS.',
     )
   }
-  const hash = await bundlerClient.sendUserOperation({
-    account,
-    callData: encodeInstallAddressBook(recipients),
-    paymaster: true,
-  })
-  await bundlerClient.waitForUserOperationReceipt({ hash, timeout: 120_000 })
-  return { addressBookInstalled: true, userOpHash: hash }
+  try {
+    const hash = await bundlerClient.sendUserOperation({
+      account,
+      callData: encodeInstallAddressBook(recipients),
+      paymaster: true,
+    })
+    await bundlerClient.waitForUserOperationReceipt({ hash, timeout: 120_000 })
+    return { addressBookInstalled: true, userOpHash: hash, registryError: null }
+  } catch (error) {
+    if (isAlreadyExistsError(error) || isExecutionRevertError(error)) {
+      return {
+        addressBookInstalled: false,
+        userOpHash: null,
+        registryError: error instanceof Error ? error.message : String(error),
+      }
+    }
+    throw error
+  }
 }
 
 export function getModularWalletConfig() {
@@ -213,14 +300,19 @@ export function getModularWalletConfig() {
   }
 }
 
-export async function loginTreasuryCredential({ label } = {}) {
+export async function loginTreasuryCredential({ label, credentialId, publicKey, rpId } = {}) {
+  if (credentialId && publicKey) {
+    return toLocalWebAuthnOwner({ id: credentialId, publicKey }, rpId || resolveBrowserRpId())
+  }
+
   const config = getModularWalletConfig()
   const passkeyTransport = toPasskeyTransport(config.clientUrl, config.clientKey)
-  return toWebAuthnCredential({
+  const credential = await toWebAuthnCredential({
     transport: passkeyTransport,
     mode: WebAuthnMode.Login,
-    username: label || 'Miroshark Treasury',
+    username: toCircleUsername(label),
   })
+  return toLocalWebAuthnOwner(credential, credential.rpId || resolveBrowserRpId())
 }
 
 function getUserOpFeeFloor(chainId, maxFeePerGas, maxPriorityFeePerGas) {
@@ -236,11 +328,12 @@ function getUserOpFeeFloor(chainId, maxFeePerGas, maxPriorityFeePerGas) {
 
 export async function createTreasurySmartAccount({ label, recoveryAddress, agentWalletAddress } = {}) {
   const config = getModularWalletConfig()
-  const credential = await registerTreasuryCredential({ label })
+  const credentialUsername = toCircleUsername(label, 'Miroshark_Treasury', { unique: true })
+  const credential = await registerTreasuryCredential({ label: credentialUsername })
   const connected = await connectTreasurySmartAccount({
     credential,
     walletAddress: null,
-    label,
+    label: credentialUsername,
     recoveryAddress,
     agentWalletAddress,
   })
@@ -249,17 +342,27 @@ export async function createTreasurySmartAccount({ label, recoveryAddress, agent
     ...connected,
     publicKey: credential.publicKey,
     credentialId: credential.id,
+    credentialUsername,
   }
 }
 
 export async function registerTreasuryCredential({ label } = {}) {
-  const config = getModularWalletConfig()
-  const passkeyTransport = toPasskeyTransport(config.clientUrl, config.clientKey)
-  return toWebAuthnCredential({
-    transport: passkeyTransport,
-    mode: WebAuthnMode.Register,
-    username: label || 'Miroshark Treasury',
+  const username = toCircleUsername(label)
+  const rpId = resolveBrowserRpId()
+  const credential = await createCredential({
+    name: username,
+    rp: {
+      id: rpId,
+      name: 'Miroshark Treasury',
+    },
+    authenticatorSelection: {
+      authenticatorAttachment: 'platform',
+      residentKey: 'preferred',
+      requireResidentKey: false,
+      userVerification: 'required',
+    },
   })
+  return toLocalWebAuthnOwner(credential, rpId)
 }
 
 export async function connectTreasurySmartAccount({ credential, walletAddress, label, recoveryAddress, agentWalletAddress } = {}) {
@@ -278,7 +381,7 @@ export async function connectTreasurySmartAccount({ credential, walletAddress, l
     ...(walletAddress ? { address: walletAddress } : {}),
     client: publicClient,
     owner: credential,
-    name: label || 'Miroshark Treasury',
+    name: toCircleUsername(label),
   })
 
   let recoveryRegistered = false
@@ -313,8 +416,8 @@ export async function connectTreasurySmartAccount({ credential, walletAddress, l
   const registeredRecipients = walletAddress
     ? []
     : resolveAgentWalletRecipients(agentWalletAddress ? [agentWalletAddress] : [])
-  const { addressBookInstalled, userOpHash } = walletAddress
-    ? { addressBookInstalled: false, userOpHash: null }
+  const { addressBookInstalled, userOpHash, registryError } = walletAddress
+    ? { addressBookInstalled: false, userOpHash: null, registryError: null }
     : await installAgentWalletRegistry({
         account,
         bundlerClient: createBundlerClient({
@@ -348,5 +451,6 @@ export async function connectTreasurySmartAccount({ credential, walletAddress, l
     registeredRecipients,
     addressMappings,
     userOpHash,
+    registryError,
   }
 }

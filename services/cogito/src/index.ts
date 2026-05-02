@@ -26,7 +26,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { logger } from "hono/logger";
 import { z } from "zod";
 
-import { ZgClient } from "./zg.js";
+import { ZgClient, ZgFundingError } from "./zg.js";
 import { ComputeClient, TESTNET_PROVIDERS } from "./compute.js";
 import { createBridgeRoutes } from "./bridge.js";
 import { createFheRoutes } from "./fhe.js";
@@ -145,6 +145,7 @@ app.use("*", bodyLimit({ maxSize: MAX_BODY_BYTES, onError: () => {
 
 app.get("/health", async (c) => {
   const bridgeStatus = await bridgeRoutes.status();
+  const zgStatus = zg ? await zg.status().catch(() => null) : null;
   return c.json({
     service: "cogito",
     status: "ok",
@@ -155,6 +156,8 @@ app.get("/health", async (c) => {
     storage: {
       ok: storageReady,
       signer: zg?.address ?? null,
+      balance_og: zgStatus?.balance_og ?? null,
+      gas_price_wei: zgStatus?.gas_price_wei ?? null,
     },
     compute: {
       ok: computeReady,
@@ -195,7 +198,23 @@ app.post("/upload", async (c) => {
     meta: meta ?? {},
     payload,
   };
-  const result = await requireStorage().upload(wrapped);
+  let result;
+  try {
+    result = await requireStorage().upload(wrapped);
+  } catch (error) {
+    if (error instanceof ZgFundingError) {
+      return c.json(
+        {
+          error: "0g_insufficient_funds",
+          message: error.message,
+          signer: error.status?.address ?? requireStorage().address,
+          balance_og: error.status?.balance_og ?? null,
+        },
+        402,
+      );
+    }
+    throw error;
+  }
   return c.json({ ...result, kind });
 });
 

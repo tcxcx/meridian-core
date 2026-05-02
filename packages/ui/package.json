@@ -11,6 +11,7 @@
     "./brand": "./src/brand/miroshark-brand.js",
     "./terminal-shell": "./src/components/terminal-shell.jsx",
     "./terminal-card": "./src/components/terminal-card.jsx",
+    "./marketing-home": "./src/components/marketing-home.jsx",
     "./unicorn-scene": "./src/components/unicorn-scene.jsx",
     "./not-found-panel": "./src/components/not-found-panel.jsx",
     "./setup-progress": "./src/components/setup-progress.jsx",

@@ -232,16 +232,16 @@ export default function PortfolioPerformance({
     <section className="stage-card portfolio-stage-card">
       <div className="card-head">
         <div className="card-head-l">
-          <span className="act-chip">ACT 3B</span>
-          <span className="card-eyebrow">Portfolio Performance</span>
+          <span className="act-chip">ROI</span>
+          <span className="card-eyebrow">Portfolio</span>
         </div>
         <span className="card-head-r">roi</span>
       </div>
 
       <div className="section-head narrow">
         <div>
-          <h3 className="section-title small">Portfolio investments over time</h3>
-          <p className="graph-caption">Track capital, ROI, realized PnL, and wallet deployment across the treasury vault and agent trading rail.</p>
+          <h3 className="section-title small">Portfolio</h3>
+          <p className="graph-caption">ROI, PnL, and wallet allocation.</p>
         </div>
       </div>
 
@@ -249,22 +249,22 @@ export default function PortfolioPerformance({
         <article className="portfolio-kpi-card">
           <span className="portfolio-kpi-label">Realized ROI</span>
           <strong className={`portfolio-kpi-value ${metrics.roi >= 0 ? 'is-up' : 'is-down'}`}>{formatPct(metrics.roi)}</strong>
-          <span className="portfolio-kpi-meta">{formatMultiple(metrics.moic)} MOIC on settled capital</span>
+          <span className="portfolio-kpi-meta">{formatMultiple(metrics.moic)} MOIC</span>
         </article>
         <article className="portfolio-kpi-card">
           <span className="portfolio-kpi-label">Realized PnL</span>
           <strong className={`portfolio-kpi-value ${metrics.realizedPnl >= 0 ? 'is-up' : 'is-down'}`}>{formatUsd(metrics.realizedPnl)}</strong>
-          <span className="portfolio-kpi-meta">{formatUsd(metrics.realizedPayout)} returned on {formatUsd(metrics.settledInvested)} settled</span>
+          <span className="portfolio-kpi-meta">{formatUsd(metrics.realizedPayout)} returned</span>
         </article>
         <article className="portfolio-kpi-card">
           <span className="portfolio-kpi-label">Deployment Rate</span>
           <strong className="portfolio-kpi-value">{formatPct(metrics.deploymentPct)}</strong>
-          <span className="portfolio-kpi-meta">{formatUsd(metrics.activeAtRisk)} currently at risk</span>
+          <span className="portfolio-kpi-meta">{formatUsd(metrics.activeAtRisk)} at risk</span>
         </article>
         <article className="portfolio-kpi-card">
           <span className="portfolio-kpi-label">Win Rate</span>
           <strong className="portfolio-kpi-value">{formatPct(metrics.winRate)}</strong>
-          <span className="portfolio-kpi-meta">{positions.length} lifetime positions tracked</span>
+          <span className="portfolio-kpi-meta">{positions.length} positions</span>
         </article>
       </div>
 
@@ -275,7 +275,7 @@ export default function PortfolioPerformance({
             <span className="wallet-system-tag">vault</span>
           </div>
           <div className="portfolio-address-value">{treasury.address || 'pending'}</div>
-          <div className="portfolio-address-meta">{shorten(treasury.address, 10, 8)} · fund this for reserve and profit sweeps</div>
+          <div className="portfolio-address-meta">{shorten(treasury.address, 10, 8)} · reserve</div>
         </article>
         <article className="portfolio-address-card">
           <div className="portfolio-address-head">
@@ -283,7 +283,7 @@ export default function PortfolioPerformance({
             <span className="wallet-system-tag">execution</span>
           </div>
           <div className="portfolio-address-value">{trading.address || 'pending'}</div>
-          <div className="portfolio-address-meta">{shorten(trading.address, 10, 8)} · fund this for live position deployment</div>
+          <div className="portfolio-address-meta">{shorten(trading.address, 10, 8)} · trading</div>
         </article>
       </div>
 
@@ -313,7 +313,7 @@ export default function PortfolioPerformance({
 
         <article className="portfolio-chart-card">
           <div className="portfolio-chart-head">
-            <span>Wallet allocation now</span>
+            <span>Wallets</span>
             <span>{formatUsd(num(treasury.gateway_balance_usdc) + num(trading.available_to_deploy_usdc) + num(balances.deployed_at_risk))}</span>
           </div>
           <div className="portfolio-chart-wrap compact">

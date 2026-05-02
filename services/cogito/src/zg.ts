@@ -18,6 +18,28 @@ export interface UploadResult {
   size_bytes: number;
 }
 
+export interface ZgStatus {
+  address: string;
+  balance_wei: string;
+  balance_og: string;
+  gas_price_wei: string | null;
+}
+
+export class ZgFundingError extends Error {
+  status: ZgStatus | null;
+
+  constructor(message: string, status: ZgStatus | null = null) {
+    super(message);
+    this.name = "ZgFundingError";
+    this.status = status;
+  }
+}
+
+function isInsufficientFunds(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /insufficient funds|insufficient funds for transfer/i.test(message);
+}
+
 export class ZgClient {
   private signer: ethers.Wallet;
   private indexer: Indexer;
@@ -34,6 +56,18 @@ export class ZgClient {
     return this.signer.address;
   }
 
+  async status(): Promise<ZgStatus> {
+    const balance = await this.signer.provider!.getBalance(this.signer.address);
+    const fee = await this.signer.provider!.getFeeData().catch(() => null);
+    const gasPrice = fee?.gasPrice ?? null;
+    return {
+      address: this.signer.address,
+      balance_wei: balance.toString(),
+      balance_og: ethers.formatEther(balance),
+      gas_price_wei: gasPrice ? gasPrice.toString() : null,
+    };
+  }
+
   /** Upload a JSON-serialisable payload. Returns the merkle root (hex). */
   async upload(payload: unknown): Promise<UploadResult> {
     const json = JSON.stringify(payload);
@@ -46,7 +80,15 @@ export class ZgClient {
     if (!rootHash) throw new Error("merkleTree returned empty root");
 
     const [tx, uploadErr] = await this.indexer.upload(data, this.rpcUrl, this.signer);
-    if (uploadErr) throw new Error(`indexer.upload failed: ${uploadErr}`);
+    if (uploadErr) {
+      if (isInsufficientFunds(uploadErr)) {
+        throw new ZgFundingError(
+          `0G signer ${this.signer.address} needs more Galileo OG for storage upload gas.`,
+          await this.status().catch(() => null),
+        );
+      }
+      throw new Error(`indexer.upload failed: ${uploadErr}`);
+    }
 
     let txHash: string | null = null;
     if (tx) {

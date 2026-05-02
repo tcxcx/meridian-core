@@ -1,7 +1,6 @@
 export const mirosharkBrand = {
   name: 'MiroShark',
-  description:
-    'Graph-native swarm trading terminal for prediction-market operators. White paper surfaces, electric blue command rails, mono facts, and dense capital telemetry.',
+  description: 'Prediction market hedge fund terminal.',
   colors: {
     operatorBlue: '#0000ff',
     operatorBlueSoft: '#eef1ff',
@@ -36,27 +35,26 @@ export const mirosharkSteps = [
   {
     key: 'workspace',
     label: 'Workspace',
-    description: 'Create the private room, operator identity, and shared state before any wallet ceremony starts.',
+    description: 'Create the room.',
   },
   {
     key: 'treasury',
     label: 'Treasury',
-    description: 'Run the Polygon modular-wallet ceremony and separate high-trust treasury custody from execution.',
+    description: 'Create treasury.',
   },
   {
     key: 'trading',
     label: 'Trading',
-    description: 'Confirm the agent trading wallet, deployable budget, and Polygon Amoy funding path.',
+    description: 'Confirm trading wallet.',
   },
   {
     key: 'openclaw',
     label: 'OpenClaw',
-    description: 'Attach the external operator runtime under MiroShark policy controls.',
+    description: 'Connect runtime.',
   },
   {
     key: 'launch',
     label: 'Launch',
-    description: 'Review readiness and enter the live operator terminal.',
+    description: 'Enter terminal.',
   },
 ]
-

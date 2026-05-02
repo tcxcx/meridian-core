@@ -8,9 +8,9 @@ export function SetupProgress({ steps, activeStep, complete = {}, progress = 0 }
         </div>
         <span className="ms-card-head-r">{progress}%</span>
       </div>
-      <div className="ms-card-title">Route-by-route custody setup</div>
+      <div className="ms-card-title">Setup</div>
       <p className="ms-card-copy">
-        Follow the MiroShark route order. One active route, one live ceremony, one accountable state transition at a time.
+        Finish each step in order.
       </p>
       <div className="ms-progress-track" aria-hidden="true">
         <div className="ms-progress-fill" style={{ width: `${progress}%` }} />
@@ -38,4 +38,3 @@ export function SetupProgress({ steps, activeStep, complete = {}, progress = 0 }
     </div>
   )
 }
-

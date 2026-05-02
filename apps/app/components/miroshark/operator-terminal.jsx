@@ -7,7 +7,6 @@ import GraphPanel from '@/components/miroshark/graph-panel'
 import PortfolioPerformance from '@/components/miroshark/portfolio-performance'
 import WalletActionModals from '@/components/miroshark/wallet-action-modals'
 import WalletGatewayDropdown from '@/components/miroshark/wallet-gateway-dropdown'
-import { demoGraphData } from '@/lib/demo-graph'
 import { buildOpportunityGraph, scoreOpportunity } from '@/lib/opportunity-graph'
 
 const BACKEND_BASE = '/backend'
@@ -15,11 +14,11 @@ const SIGNAL_BASE = '/signal'
 const EXECUTION_BASE = '/execution'
 
 const scenarioVariables = [
-  { key: 'geopoliticalStress', label: 'Geopolitical Stress' },
-  { key: 'diplomaticBreakthrough', label: 'Diplomatic Breakthrough' },
-  { key: 'energyDislocation', label: 'Energy Dislocation' },
-  { key: 'cryptoMomentum', label: 'Crypto Momentum' },
-  { key: 'electionTurbulence', label: 'Election Turbulence' },
+  { key: 'geopoliticalStress', label: 'Geopolitics' },
+  { key: 'diplomaticBreakthrough', label: 'Diplomacy' },
+  { key: 'energyDislocation', label: 'Energy' },
+  { key: 'cryptoMomentum', label: 'Crypto' },
+  { key: 'electionTurbulence', label: 'Elections' },
 ]
 
 function defaultTicker() {
@@ -229,9 +228,9 @@ export default function OperatorTerminal() {
     [signalCache, markets.length],
   )
   const swarmScaleLabel = useMemo(() => {
-    const classified = Math.max(Object.keys(signalCache || {}).length, 1)
-    const scale = Math.max(1000000, classified * 250000)
-    return `up to ${(scale / 1000000).toFixed(1)}M agents`
+    const activeSignals = Object.keys(signalCache || {}).length
+    const activeAgents = activeSignals * 12
+    return activeAgents ? `${activeAgents} active agents` : 'swarm idle'
   }, [signalCache])
   const localOptimumLabel = useMemo(() => {
     const lead = bestOpportunity
@@ -255,7 +254,7 @@ export default function OperatorTerminal() {
     [activeVisiblePositions.length, historicalVisiblePositions.length],
   )
   const operatorModeLabel = `operator ${operatorStatus?.mode || 'manual'}`
-  const chainLabel = `${routerHealth?.chains?.settlement || 'settlement?'} ⇄ ${routerHealth?.chains?.trading || 'trading?'}`
+  const chainLabel = `${operatorStatus?.capital_plane?.settlement_chain?.label || routerHealth?.chains?.settlement || 'Settlement'} ⇄ ${operatorStatus?.capital_plane?.primary_trading_chain?.label || routerHealth?.chains?.trading || 'Polygon'}`
   const executionOnline = routerHealth?.status === 'ok'
   const signalOnline = signalHealth?.status === 'ok'
   const openclawEnabled = Boolean(operatorStatus?.automation?.openclaw_enabled || operatorStatus?.automation?.openclaw_session)
@@ -275,7 +274,6 @@ export default function OperatorTerminal() {
   const capitalPolicy = capitalPlane?.policy || {}
   const capitalDomains = capitalPlane?.per_domain || []
   const capitalActions = capitalPlane?.actions || []
-  const capitalSourceLabel = capitalPlane?.source || ''
   const treasuryFundingMode = treasuryPlane?.funding_mode || ''
   const gatewayBalanceView = gatewayBalance || {}
   const domainRows = gatewayBalanceView?.perDomain || []
@@ -303,27 +301,27 @@ export default function OperatorTerminal() {
       swarmScaleLabel,
     },
   }), [rankedMarkets, selectedMarket, signalCache, selectedSignal, visiblePositions, topologyData, cryoRows, operatorStatus, selectedTenant, worldState, swarmScaleLabel])
-  const activeGraphData = graphMode === 'live' ? liveGraphData : (contextGraphData || demoGraphData)
+  const activeGraphData = graphMode === 'live' ? liveGraphData : contextGraphData
   const graphSourcePlaceholder = graphMode === 'project' ? 'proj_…' : graphMode === 'simulation' ? 'simulation id' : 'graph id'
   const graphStatusText = useMemo(() => {
     if (graphMode === 'live') {
       const nodes = activeGraphData?.nodes?.length || 0
       const edges = activeGraphData?.edges?.length || 0
-      return `Live opportunity graph · ${nodes} nodes · ${edges} edges · selected tenant ${selectedTenant.toUpperCase()}`
+      return `${nodes} nodes · ${edges} edges`
     }
     if (graphLoading) return 'Loading analysis context graph…'
     if (graphError) return graphError
     if (graphResolvedLabel) return `Loaded ${graphResolvedLabel}`
-    return 'Load a project, simulation, or graph id to layer richer context over the terminal.'
-  }, [graphMode, activeGraphData, selectedTenant, graphLoading, graphError, graphResolvedLabel])
+    return 'Load a saved graph to compare against the live swarm.'
+  }, [graphMode, activeGraphData, graphLoading, graphError, graphResolvedLabel])
 
   const headlineItems = useMemo(() => {
     if (terminalTicker.headlines?.length) return terminalTicker.headlines
-    return [{ kind: 'headline', source: 'Miroshark', anchor: 'Newswire is syncing Reuters and Bloomberg market coverage', published_label: null }]
+    return [{ kind: 'headline', source: 'MiroShark', anchor: 'Newswire syncing', published_label: null }]
   }, [terminalTicker])
   const tapeItems = useMemo(() => {
     if (terminalTicker.tape?.length) return terminalTicker.tape
-    return [{ kind: 'event', label: 'Market tape is warming up · waiting for live macro prices and operator events' }]
+    return [{ kind: 'event', label: 'Market tape warming up' }]
   }, [terminalTicker])
   const duplicatedHeadlineItems = useMemo(() => loopTickerItems(headlineItems), [headlineItems])
   const duplicatedTapeItems = useMemo(() => loopTickerItems(tapeItems), [tapeItems])
@@ -518,7 +516,7 @@ export default function OperatorTerminal() {
       })
       setSignalCache((current) => ({ ...current, [marketId]: payload }))
       if (!quiet) {
-        addAlert(`signal ${payload.edge?.outcome || '—'} ${formatPp(payload.edge?.edge_pp || 0)} · conf ${formatFloat(payload.confidence || 0)}`, 'success')
+        addAlert(`signal ${payload.edge?.outcome || '—'} ${formatPp(payload.edge?.edge_pp || 0)}`, 'success')
       }
       return payload
     } catch (error) {
@@ -547,7 +545,7 @@ export default function OperatorTerminal() {
         setSelectedMarketId((current) => current || targets[0].market_id)
       }
       await fetchEntropy()
-      addAlert(`classified ${targets.length} top markets into the alpha board`, 'success')
+      addAlert(`classified ${targets.length} markets`, 'success')
     } finally {
       setClassifyLoading(false)
     }
@@ -845,7 +843,7 @@ export default function OperatorTerminal() {
       <header className="terminal-header">
         <div className="brand-block">
           <div className="brand-mark">MIROSHARK</div>
-          <div className="brand-sub">single operator terminal for graph-native swarm trading</div>
+          <div className="brand-sub">prediction-market hedge fund</div>
         </div>
         <div className="status-strip">
           <WalletGatewayDropdown
@@ -857,7 +855,7 @@ export default function OperatorTerminal() {
           <span className="status-pill">{chainLabel}</span>
           <span className={`status-pill ${signalOnline ? '' : 'warn'}`}>signal {signalOnline ? 'online' : 'offline'}</span>
           <span className={`status-pill ${executionOnline ? '' : 'warn'}`}>router {executionOnline ? 'online' : 'offline'}</span>
-          <span className={`status-pill ${openclawEnabled ? '' : 'warn'}`}>openclaw {openclawEnabled ? 'ready' : 'not wired'}</span>
+          <span className={`status-pill ${openclawEnabled ? '' : 'warn'}`}>openclaw {openclawEnabled ? 'ready' : 'manual'}</span>
         </div>
       </header>
 
@@ -919,7 +917,7 @@ export default function OperatorTerminal() {
 
       {onboardingMode ? (
         <div className="terminal-banner" style={{ margin: '0 0 16px', border: '2px solid #2a5fff', background: '#0b1730', color: '#f5f8ff', padding: '14px 18px', boxShadow: '10px 10px 0 #12338f' }}>
-          Platform onboarding is active. Finish treasury custody and trading-wallet provisioning here, then return to <a href="/setup" style={{ color: '#8db1ff' }}>setup</a> to confirm the stack is green.
+          Onboarding active. Finish wallets, then return to <a href="/setup" style={{ color: '#8db1ff' }}>setup</a>.
         </div>
       ) : null}
 
@@ -928,15 +926,12 @@ export default function OperatorTerminal() {
           <section className="rail-card accent-card">
             <div className="card-head">
               <div className="card-head-l">
-                <span className="act-chip">ACT 0</span>
-                <span className="card-eyebrow">Automation</span>
+                <span className="act-chip">LOOP</span>
+                <span className="card-eyebrow">Operator</span>
               </div>
               <span className="card-head-r">24/7</span>
             </div>
-            <div className="card-title">Human + AI operator lane</div>
-            <p className="card-copy">
-              Swarm intelligence and execution now live in one app. Universe classification, swarm debate, graph analysis, alerts, and settlement inventory all stay inside this terminal.
-            </p>
+            <div className="card-title">Live Loop</div>
             <dl className="metric-list">
               <div className="metric-row"><dt>Mode</dt><dd>{operatorStatus.mode || 'manual'}</dd></div>
               <div className="metric-row"><dt>Ready now</dt><dd>{actionableMarkets.length}</dd></div>
@@ -952,16 +947,12 @@ export default function OperatorTerminal() {
           <section className="rail-card accent-card">
             <div className="card-head">
               <div className="card-head-l">
-                <span className="act-chip">CAP</span>
-                <span className="card-eyebrow">Gateway Capital Plane</span>
+                <span className="act-chip">USDC</span>
+                <span className="card-eyebrow">Wallets</span>
               </div>
               <span className="card-head-r">polygon-first</span>
             </div>
-            <div className="card-title">Unified balance for treasury and trading</div>
-            <p className="card-copy">
-              Sendero’s gateway-migration logic now drives the wallet model here: treasury stays passkey-protected, the trading wallet deploys unified USDC on Polygon, KeeperHub handles agentic money movement, and OpenClaw closes the loop.
-            </p>
-            {capitalSourceLabel ? <div className="detail-note">Reference flow: {capitalSourceLabel}</div> : null}
+            <div className="card-title">Capital</div>
             <div className="wallet-hero">
               <div className="wallet-hero-card">
                 <div className="wallet-kicker">Business Balance</div>
@@ -971,7 +962,7 @@ export default function OperatorTerminal() {
               </div>
               <div className="wallet-actions-grid">
                 <div className="wallet-action-note">
-                  The Sendero-style wallet control plane now lives in the top-right header, including Gateway actions and 0G agent registration.
+                  Wallet actions live in the header.
                 </div>
               </div>
             </div>
@@ -985,7 +976,7 @@ export default function OperatorTerminal() {
             </div>
             {hasBalanceMotion ? (
               <div className="wallet-motion-note">
-                Funds in motion: ${formatMoney(pendingCreditBalance)} finalizing and ${formatMoney(opsStagingBalance)} sitting in ops staging.
+                In motion: ${formatMoney(pendingCreditBalance)} pending · ${formatMoney(opsStagingBalance)} staging.
               </div>
             ) : null}
             <div className="capital-subsection">
@@ -996,7 +987,7 @@ export default function OperatorTerminal() {
                     <span>Treasury Wallet</span>
                     <span className="wallet-system-tag">vault</span>
                   </div>
-                  <div className="wallet-system-copy">Passkey-protected reserve and profit vault.</div>
+                  <div className="wallet-system-copy">Reserve, passkey, profits.</div>
                   <div className="capital-pill-row">
                     <span className={`capital-pill ${treasuryPlane.passkey_ready ? 'is-ready' : 'is-blocked'}`}>passkey {treasuryPlane.passkey_ready ? 'ready' : 'blocked'}</span>
                     <span className={`capital-pill ${treasuryPlane.multisig_ready ? 'is-ready' : 'is-blocked'}`}>multisig {treasuryPlane.multisig_ready ? 'ready' : 'blocked'}</span>
@@ -1006,9 +997,6 @@ export default function OperatorTerminal() {
                     <div className="metric-row"><dt>Gateway reserve</dt><dd>{formatUsd(treasuryPlane.gateway_balance_usdc || 0)}</dd></div>
                     <div className="metric-row"><dt>Funding mode</dt><dd>{treasuryPlane.funding_mode || 'unknown'}</dd></div>
                     <div className="metric-row"><dt>Address</dt><dd>{treasuryPlane.address ? shorten(treasuryPlane.address, 12) : 'pending'}</dd></div>
-                    {treasuryPlane.legacy_circle_treasury_address ? (
-                      <div className="metric-row"><dt>Legacy Circle</dt><dd>{shorten(treasuryPlane.legacy_circle_treasury_address, 12)}</dd></div>
-                    ) : null}
                   </dl>
                 </article>
                 <article className="wallet-system-card">
@@ -1016,7 +1004,7 @@ export default function OperatorTerminal() {
                     <span>Trading Wallet</span>
                     <span className="wallet-system-tag">agent rail</span>
                   </div>
-                  <div className="wallet-system-copy">Unified USDC budget materialized onto the prediction-market rail.</div>
+                  <div className="wallet-system-copy">Budgeted Polymarket execution.</div>
                   <dl className="metric-list compact">
                     <div className="metric-row"><dt>Venue</dt><dd>{tradingPlane.venue || 'Polymarket'}</dd></div>
                     <div className="metric-row"><dt>Deployable</dt><dd>{formatUsd(tradingPlane.available_to_deploy_usdc || 0)}</dd></div>
@@ -1028,10 +1016,9 @@ export default function OperatorTerminal() {
               </div>
               {treasuryPlane.shared_with_trading ? (
                 <div className="detail-note">
-                  Treasury and trading currently share the same Polygon signer. Provision the modular treasury to split custody from execution and retire the legacy Circle donor path cleanly.
+                  Funded signer active for hackathon operations.
                 </div>
               ) : null}
-              <div className="detail-note">{tradingPlane.detail || 'Gateway unified balance materializes to Polygon when the swarm decides to trade.'}</div>
             </div>
             <div className="capital-subsection">
               <div className="capital-subhead">Risk Policy</div>
@@ -1078,7 +1065,7 @@ export default function OperatorTerminal() {
                         <span>{item.chain} ops staging</span>
                         <span>${formatMoney(item.usdc)}</span>
                       </div>
-                      <div className="capital-item-copy">{shorten(item.walletAddress, 16)} waiting to sweep back into the unified balance.</div>
+                      <div className="capital-item-copy">{shorten(item.walletAddress, 16)} pending sweep.</div>
                     </li>
                   ))}
                 </ul>
@@ -1091,7 +1078,7 @@ export default function OperatorTerminal() {
                 <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('send')}>Send</button>
                 <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('bridge')}>Bridge</button>
                 <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('swap')}>Swap</button>
-                <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('treasury')}>Treasury Setup</button>
+                <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('treasury')}>Treasury</button>
               </div>
             </div>
             <div className="capital-subsection">
@@ -1114,11 +1101,11 @@ export default function OperatorTerminal() {
             <div className="card-head">
               <div className="card-head-l">
                 <span className="act-chip">OPS</span>
-                <span className="card-eyebrow">Operator Context</span>
+                <span className="card-eyebrow">Session</span>
               </div>
             </div>
             <div className="field-stack">
-              <label className="field-label" htmlFor="tenant-select">Tenant</label>
+              <label className="field-label" htmlFor="tenant-select">Fund</label>
               <select id="tenant-select" className="field-input" value={selectedTenant} onChange={(event) => setSelectedTenant(event.target.value)}>
                 {tenantOptions.map((tenant) => <option key={tenant} value={tenant}>{tenant.toUpperCase()}</option>)}
               </select>
@@ -1135,12 +1122,12 @@ export default function OperatorTerminal() {
             <div className="card-head">
               <div className="card-head-l">
                 <span className="act-chip">SPN</span>
-                <span className="card-eyebrow">Sponsor Readiness</span>
+                <span className="card-eyebrow">Sponsor Rails</span>
               </div>
               <span className="card-head-r">{readySponsorCount}/{sponsorRows.length || 0}</span>
             </div>
             <div className="scenario-copy">
-              Build path: sponsors → encrypted balances → trading tools → OpenClaw → autonomous testnet operation.
+              Live integrations.
             </div>
             <ul className="sponsor-list">
               {sponsorRows.map((item) => (
@@ -1171,12 +1158,12 @@ export default function OperatorTerminal() {
           <section className="rail-card">
             <div className="card-head">
               <div className="card-head-l">
-                <span className="act-chip">SIM</span>
-                <span className="card-eyebrow">Gods-Eye Variables</span>
+                <span className="act-chip">STATE</span>
+                <span className="card-eyebrow">Scenario</span>
               </div>
             </div>
             <div className="scenario-copy">
-              Inject world-state assumptions, rehearse futures, and search for the local optimum in complex group dynamics.
+              Rehearse the future.
             </div>
             <div className="scenario-stack">
               {scenarioVariables.map((variable) => (
@@ -1198,7 +1185,7 @@ export default function OperatorTerminal() {
               ))}
             </div>
             <div className="scenario-foot">
-              <span>swarm scale {swarmScaleLabel}</span>
+              <span>{swarmScaleLabel}</span>
               <span>{localOptimumLabel}</span>
             </div>
           </section>
@@ -1239,7 +1226,7 @@ export default function OperatorTerminal() {
                   <span className="audit-event">{event.event}</span>
                   <span className="audit-status">{event.status}</span>
                 </li>
-              )) : <li className="audit-empty">{selectedPosition ? 'No audit events loaded.' : 'Select a position to inspect its timeline.'}</li>}
+              )) : <li className="audit-empty">{selectedPosition ? 'No audit loaded.' : 'Select a position.'}</li>}
             </ul>
           </section>
         </aside>
@@ -1248,27 +1235,27 @@ export default function OperatorTerminal() {
           <section className="stage-card hero-card">
             <div className="card-head">
               <div className="card-head-l">
-                <span className="act-chip">ACT 1</span>
+                <span className="act-chip">SCAN</span>
                 <span className="card-eyebrow">Alpha Board</span>
               </div>
               <span className="card-head-r">intel</span>
             </div>
             <div className="section-head">
-              <div><h2 className="section-title">Classify the best opportunities, then act</h2></div>
+              <div><h2 className="section-title">Prediction Markets</h2></div>
               <div className="action-row">
-                <button className="primary-btn" disabled={marketLoading} onClick={scanMarkets}>{marketLoading ? 'Scanning…' : 'Scan Universe'}</button>
-                <button className="secondary-btn" disabled={classifyLoading} onClick={classifyUniverse}>{classifyLoading ? 'Classifying…' : 'Classify Top Markets'}</button>
+                <button className="primary-btn" disabled={marketLoading} onClick={scanMarkets}>{marketLoading ? 'Scanning…' : 'Scan'}</button>
+                <button className="secondary-btn" disabled={classifyLoading} onClick={classifyUniverse}>{classifyLoading ? 'Classifying…' : 'Classify'}</button>
                 <button className="secondary-btn" disabled={!selectedMarket || signalLoading} onClick={runSelectedSignal}>{signalLoading ? 'Running…' : 'Run Swarm'}</button>
-                <button className="secondary-btn" disabled={!selectedMarket || streamLoading} onClick={streamSelectedSignal}>{streamLoading ? 'Streaming…' : 'Live Debate'}</button>
+                <button className="secondary-btn" disabled={!selectedMarket || streamLoading} onClick={streamSelectedSignal}>{streamLoading ? 'Streaming…' : 'Debate'}</button>
               </div>
             </div>
             <div className="hero-copy">
               <p>
-                Miroshark is the final operator app. Its swarm rehearsal engine converts graph-native analysis into ranked prediction market opportunities.
+                Scan markets. Rehearse outcomes. Deploy small.
               </p>
               {bestOpportunity ? (
                 <p className="hero-highlight">
-                  Best live setup: <strong>{bestOpportunity.question}</strong>
+                  Lead: <strong>{bestOpportunity.question}</strong>
                   <span>{formatPp(bestOpportunity.signal?.edge?.edge_pp || 0)} edge</span>
                   <span>{formatFloat(bestOpportunity.signal?.confidence || 0)} confidence</span>
                   <span>{localOptimumLabel}</span>
@@ -1294,17 +1281,17 @@ export default function OperatorTerminal() {
                     <span>{formatPp(row.scenarioBias || 0)} scenario</span>
                   </div>
                 </button>
-              )) : <div className="empty-card">Run `Scan Universe` to populate the board.</div>}
+              )) : <div className="empty-card">Run Scan to load live markets.</div>}
             </div>
           </section>
 
           <section className="stage-card">
             <div className="card-head">
               <div className="card-head-l">
-                <span className="act-chip">ACT 2</span>
-                <span className="card-eyebrow">Selected Opportunity</span>
+                <span className="act-chip">THESIS</span>
+                <span className="card-eyebrow">Selected Market</span>
               </div>
-              <span className="card-head-r">deliberation</span>
+              <span className="card-head-r">decision</span>
             </div>
             <div className="section-head narrow">
               <div><h3 className="section-title small">{selectedMarket?.question || 'No market selected'}</h3></div>
@@ -1321,10 +1308,10 @@ export default function OperatorTerminal() {
                 <div className="verdict-meta">
                   <span>edge {formatPp(selectedSignal?.edge?.edge_pp || 0)}</span>
                   <span>conf {formatFloat(selectedSignal?.confidence || 0)}</span>
-                  <span>phase {selectedSignal?.phase || 'idle'}</span>
+                  <span>{selectedSignal?.phase || 'idle'}</span>
                 </div>
                 <p className="verdict-copy">
-                  {selectedSignal?.reasoning || 'Run the swarm to convert the selected market into an explicit investment thesis.'}
+                  {selectedSignal?.reasoning || 'Run the swarm.'}
                 </p>
               </div>
               <div className="factor-card">
@@ -1365,10 +1352,10 @@ export default function OperatorTerminal() {
           <section className="stage-card graph-stage-card">
             <div className="card-head">
               <div className="card-head-l">
-                <span className="act-chip">ACT 2B</span>
+                <span className="act-chip">GRAPH</span>
                 <span className="card-eyebrow">Swarm Analysis</span>
               </div>
-              <span className="card-head-r">swarm</span>
+              <span className="card-head-r">live</span>
             </div>
             <div className="graph-stage-toolbar">
               <div className="graph-mode-row">
@@ -1383,7 +1370,7 @@ export default function OperatorTerminal() {
                       if (mode === 'live') setContextGraphData(null)
                     }}
                   >
-                    {mode === 'live' ? 'Live Opportunity' : mode === 'project' ? 'Project' : mode === 'simulation' ? 'Simulation' : 'Graph ID'}
+                        {mode === 'live' ? 'Live' : mode === 'project' ? 'Project' : mode === 'simulation' ? 'Sim' : 'Graph'}
                   </button>
                 ))}
               </div>
@@ -1403,9 +1390,9 @@ export default function OperatorTerminal() {
             </div>
             <div className="graph-stage-summary">
               <div className="graph-summary-text">
-                <h3 className="section-title small">Million-scale swarm rehearsal engine</h3>
+                <h3 className="section-title small">Swarm graph</h3>
                 <p className="graph-caption">{graphStatusText}</p>
-                <p className="graph-caption emphasis">This graph is the rehearsal engine for prediction market capital allocation.</p>
+                <p className="graph-caption emphasis">Live thesis map.</p>
               </div>
             </div>
             <section className="graph-surface graph-surface-embedded">
@@ -1422,13 +1409,13 @@ export default function OperatorTerminal() {
           <section className="stage-card">
             <div className="card-head">
               <div className="card-head-l">
-                <span className="act-chip">ACT 3</span>
+                <span className="act-chip">DEBATE</span>
                 <span className="card-eyebrow">Live Swarm Feed</span>
               </div>
               <span className="card-head-r">{streamStatus}</span>
             </div>
             <div className="section-head narrow">
-              <div><h3 className="section-title small">Agent debate and operator guidance</h3></div>
+              <div><h3 className="section-title small">Swarm Debate</h3></div>
             </div>
             <div className="feed-panel">
               {swarmFeed.length ? swarmFeed.map((item) => (
@@ -1439,7 +1426,7 @@ export default function OperatorTerminal() {
                   </div>
                   <div className="feed-copy">{item.message}</div>
                 </div>
-              )) : <div className="empty-card">Start `Live Debate` to watch the swarm stream beliefs into the operator loop.</div>}
+              )) : <div className="empty-card">Start Debate.</div>}
             </div>
           </section>
 
@@ -1455,17 +1442,17 @@ export default function OperatorTerminal() {
           <section className="stage-card">
             <div className="card-head">
               <div className="card-head-l">
-                <span className="act-chip">ACT 4</span>
+                <span className="act-chip">PNL</span>
                 <span className="card-eyebrow">Positions</span>
               </div>
               <span className="card-head-r">{executionSummary}</span>
             </div>
             <div className="section-head narrow">
-              <div><h3 className="section-title small">Execution and settlement inventory</h3></div>
+              <div><h3 className="section-title small">Positions</h3></div>
               <button className="secondary-btn" onClick={fetchPositions}>Refresh positions</button>
             </div>
             <div className="execution-stack">
-              {!activeVisiblePositions.length ? <div className="empty-card">No active positions. Open one from the verdict surface to watch funding, bridge, CLOB, resolve, and settle appear here.</div> : null}
+              {!activeVisiblePositions.length ? <div className="empty-card">No active positions.</div> : null}
 
               {activeVisiblePositions.map((position) => (
                 <article key={position.position_id} className={`pos-card ${selectedPosition?.position_id === position.position_id ? 'is-active' : ''}`} onClick={() => setSelectedPositionId(position.position_id)}>
@@ -1497,7 +1484,7 @@ export default function OperatorTerminal() {
                       </table>
                     </div>
                     <div className="timeline-wrap">
-                      <div className="timeline-label">Proof-Of-Execution Timeline</div>
+                      <div className="timeline-label">Timeline</div>
                       <div className="timeline">
                         {orderedAuditForPosition(position.position_id).length ? orderedAuditForPosition(position.position_id).map((event) => (
                           <div key={`${position.position_id}-${event.ts}-${event.event}`} className={`tl-event ${timelineClass(event)}`}>
@@ -1539,7 +1526,7 @@ export default function OperatorTerminal() {
                         </table>
                       </div>
                       <div className="timeline-wrap">
-                        <div className="timeline-label">Proof-Of-Execution Timeline</div>
+                      <div className="timeline-label">Timeline</div>
                         <div className="timeline">
                           {orderedAuditForPosition(position.position_id).length ? orderedAuditForPosition(position.position_id).map((event) => (
                             <div key={`${position.position_id}-${event.ts}-${event.event}`} className={`tl-event ${timelineClass(event)}`}>
@@ -1553,7 +1540,7 @@ export default function OperatorTerminal() {
                     </div>
                   </article>
                 ))}
-                {!historicalVisiblePositions.length ? <div className="empty-card">No settled or failed positions yet.</div> : null}
+                {!historicalVisiblePositions.length ? <div className="empty-card">No history.</div> : null}
               </div>
             </div>
           </section>

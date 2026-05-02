@@ -128,7 +128,7 @@ export function resolveSendChainName() {
 export function resolveSwapChainName() {
   const explicit = envValue('MIROSHARK_SWAP_CHAIN')
   if (explicit) return explicit
-  return String(process.env.POLYMARKET_CHAIN_ID || '80002') === '137' ? 'Polygon' : 'Arc_Testnet'
+  return 'Polygon'
 }
 
 export function resolveChainConfig(name) {
