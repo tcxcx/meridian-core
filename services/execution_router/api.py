@@ -242,6 +242,34 @@ def create_app() -> Flask:
             blockers.append("burner_factory: BURNER_SEED not configured")
         return blockers
 
+    def _probe_rpc(url: str, *, timeout: float = 1.0) -> dict:
+        """E7: best-effort eth_blockNumber probe so /health distinguishes
+        'RPC URL configured' from 'RPC actually reachable right now.'
+        Returns {ok, latency_ms, block?, error?}. Stdlib only, hard 1s cap."""
+        if not url:
+            return {"ok": False, "error": "no url configured"}
+        body = json.dumps({
+            "jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1,
+        }).encode("utf-8")
+        req = Request(url, data=body, headers={"Content-Type": "application/json"})
+        start = _time.monotonic()
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            latency_ms = int((_time.monotonic() - start) * 1000)
+            block_hex = payload.get("result")
+            return {
+                "ok": True,
+                "latency_ms": latency_ms,
+                "block": int(block_hex, 16) if isinstance(block_hex, str) else None,
+            }
+        except Exception as e:  # noqa: BLE001
+            return {
+                "ok": False,
+                "latency_ms": int((_time.monotonic() - start) * 1000),
+                "error": str(e)[:120],
+            }
+
     bp = Blueprint("meridian_execution", __name__, url_prefix="/api/execution")
 
     @app.get("/health")
@@ -277,6 +305,15 @@ def create_app() -> Flask:
             },
             "demo_require_real": _demo_real_required(),
             "demo_real_blockers": _check_demo_real_blockers() if _demo_real_required() else [],
+            "rpcs": {
+                "arb_sepolia": _probe_rpc(os.environ.get("ARB_SEPOLIA_RPC_URL", ""), timeout=1.0),
+                "polygon_amoy": _probe_rpc(
+                    os.environ.get("POLYGON_AMOY_RPC_URL")
+                    or os.environ.get("POLYGON_RPC_URL")
+                    or "https://rpc-amoy.polygon.technology",
+                    timeout=1.0,
+                ),
+            },
             "positions": len(store.list()),
         }
 
