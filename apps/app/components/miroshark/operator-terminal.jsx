@@ -9,7 +9,6 @@ import WalletActionModals from '@/components/miroshark/wallet-action-modals'
 import WalletGatewayDropdown from '@/components/miroshark/wallet-gateway-dropdown'
 import { buildOpportunityGraph, scoreOpportunity } from '@/lib/opportunity-graph'
 
-const BACKEND_BASE = '/backend'
 const SIGNAL_BASE = '/signal'
 const EXECUTION_BASE = '/execution'
 
@@ -99,18 +98,6 @@ async function readJson(url, options) {
   return json
 }
 
-async function getProject(projectId) {
-  return readJson(`${BACKEND_BASE}/api/graph/project/${projectId}`)
-}
-
-async function getGraphData(graphId) {
-  return readJson(`${BACKEND_BASE}/api/graph/data/${graphId}`)
-}
-
-async function getSimulation(simulationId) {
-  return readJson(`${BACKEND_BASE}/api/simulation/${simulationId}`)
-}
-
 export default function OperatorTerminal() {
   const searchParams = useSearchParams()
   const [markets, setMarkets] = useState([])
@@ -148,13 +135,6 @@ export default function OperatorTerminal() {
   const [streamStatus, setStreamStatus] = useState('idle')
   const [showHistory, setShowHistory] = useState(false)
   const [activeCapitalModal, setActiveCapitalModal] = useState('')
-
-  const [graphMode, setGraphMode] = useState('live')
-  const [graphSourceValue, setGraphSourceValue] = useState('')
-  const [contextGraphData, setContextGraphData] = useState(null)
-  const [graphLoading, setGraphLoading] = useState(false)
-  const [graphError, setGraphError] = useState('')
-  const [graphResolvedLabel, setGraphResolvedLabel] = useState('')
 
   const positionsEventSourceRef = useRef(null)
   const swarmEventSourceRef = useRef(null)
@@ -228,9 +208,8 @@ export default function OperatorTerminal() {
     [signalCache, markets.length],
   )
   const swarmScaleLabel = useMemo(() => {
-    const activeSignals = Object.keys(signalCache || {}).length
-    const activeAgents = activeSignals * 12
-    return activeAgents ? `${activeAgents} active agents` : 'swarm idle'
+    const classified = Object.keys(signalCache || {}).length
+    return classified ? `${classified} markets classified` : 'swarm idle'
   }, [signalCache])
   const localOptimumLabel = useMemo(() => {
     const lead = bestOpportunity
@@ -301,19 +280,11 @@ export default function OperatorTerminal() {
       swarmScaleLabel,
     },
   }), [rankedMarkets, selectedMarket, signalCache, selectedSignal, visiblePositions, topologyData, cryoRows, operatorStatus, selectedTenant, worldState, swarmScaleLabel])
-  const activeGraphData = graphMode === 'live' ? liveGraphData : contextGraphData
-  const graphSourcePlaceholder = graphMode === 'project' ? 'proj_…' : graphMode === 'simulation' ? 'simulation id' : 'graph id'
   const graphStatusText = useMemo(() => {
-    if (graphMode === 'live') {
-      const nodes = activeGraphData?.nodes?.length || 0
-      const edges = activeGraphData?.edges?.length || 0
-      return `${nodes} nodes · ${edges} edges`
-    }
-    if (graphLoading) return 'Loading analysis context graph…'
-    if (graphError) return graphError
-    if (graphResolvedLabel) return `Loaded ${graphResolvedLabel}`
-    return 'Load a saved graph to compare against the live swarm.'
-  }, [graphMode, activeGraphData, graphLoading, graphError, graphResolvedLabel])
+    const nodes = liveGraphData?.nodes?.length || 0
+    const edges = liveGraphData?.edges?.length || 0
+    return `${nodes} nodes · ${edges} edges`
+  }, [liveGraphData])
 
   const headlineItems = useMemo(() => {
     if (terminalTicker.headlines?.length) return terminalTicker.headlines
@@ -681,63 +652,9 @@ export default function OperatorTerminal() {
     }
   })
 
-  const resolveContextGraphId = async () => {
-    if (graphMode === 'graph') {
-      setGraphResolvedLabel(`graph ${graphSourceValue}`)
-      return graphSourceValue
-    }
-    if (graphMode === 'project') {
-      const project = await getProject(graphSourceValue)
-      const graphId = project?.data?.graph_id
-      if (!graphId) throw new Error('project has no graph id')
-      setGraphResolvedLabel(`project ${graphSourceValue} → ${graphId}`)
-      return graphId
-    }
-
-    const simulation = await getSimulation(graphSourceValue)
-    const simulationData = simulation?.data
-    if (!simulationData) throw new Error('simulation not found')
-    if (simulationData.graph_id) {
-      setGraphResolvedLabel(`simulation ${graphSourceValue} → ${simulationData.graph_id}`)
-      return simulationData.graph_id
-    }
-    if (simulationData.project_id) {
-      const project = await getProject(simulationData.project_id)
-      const graphId = project?.data?.graph_id
-      if (!graphId) throw new Error('simulation project has no graph id')
-      setGraphResolvedLabel(`simulation ${graphSourceValue} → ${graphId}`)
-      return graphId
-    }
-    throw new Error('simulation has no graph id or project id')
-  }
-
-  const loadContextGraph = async () => {
-    if (graphMode === 'live' || !graphSourceValue) return
-    setGraphLoading(true)
-    setGraphError('')
-
-    try {
-      const graphId = await resolveContextGraphId()
-      const response = await getGraphData(graphId)
-      if (!response?.data) throw new Error('graph data response was empty')
-      setContextGraphData(response.data)
-      addAlert(`loaded analysis graph ${shorten(graphId, 10)}`, 'success')
-    } catch (error) {
-      setContextGraphData(null)
-      setGraphError(error.message || 'failed to load graph')
-      addAlert(`graph load failed: ${error.message}`, 'warn')
-    } finally {
-      setGraphLoading(false)
-    }
-  }
-
   const refreshGraphSurface = async () => {
-    if (graphMode === 'live') {
-      await Promise.all([refreshHealth(), fetchCryo(), fetchTopology()])
-      if (selectedMarket) await fetchEntropy()
-      return
-    }
-    await loadContextGraph()
+    await Promise.all([refreshHealth(), fetchCryo(), fetchTopology()])
+    if (selectedMarket) await fetchEntropy()
   }
 
   const bootTerminal = useEffectEvent(async () => {
@@ -960,11 +877,6 @@ export default function OperatorTerminal() {
                 <div className="wallet-amount-sub">spendable now · ${formatMoney(trackedBusinessBalance)} tracked</div>
                 <div className="wallet-token-mark">UNIFIED USDC</div>
               </div>
-              <div className="wallet-actions-grid">
-                <div className="wallet-action-note">
-                  Wallet actions live in the header.
-                </div>
-              </div>
             </div>
             <div className="wallet-balance-grid">
               <div className="wallet-balance-cell"><span>{treasuryFundingMode.startsWith('polygon') ? 'Polygon available' : 'Gateway available'}</span><strong>${formatMoney(gatewayAvailableBalance)}</strong></div>
@@ -1016,7 +928,7 @@ export default function OperatorTerminal() {
               </div>
               {treasuryPlane.shared_with_trading ? (
                 <div className="detail-note">
-                  Funded signer active for hackathon operations.
+                  Treasury signer also funds the trading wallet.
                 </div>
               ) : null}
             </div>
@@ -1104,12 +1016,14 @@ export default function OperatorTerminal() {
                 <span className="card-eyebrow">Session</span>
               </div>
             </div>
-            <div className="field-stack">
-              <label className="field-label" htmlFor="tenant-select">Fund</label>
-              <select id="tenant-select" className="field-input" value={selectedTenant} onChange={(event) => setSelectedTenant(event.target.value)}>
-                {tenantOptions.map((tenant) => <option key={tenant} value={tenant}>{tenant.toUpperCase()}</option>)}
-              </select>
-            </div>
+            {tenantOptions.length > 1 ? (
+              <div className="field-stack">
+                <label className="field-label" htmlFor="tenant-select">Fund</label>
+                <select id="tenant-select" className="field-input" value={selectedTenant} onChange={(event) => setSelectedTenant(event.target.value)}>
+                  {tenantOptions.map((tenant) => <option key={tenant} value={tenant}>{tenant.toUpperCase()}</option>)}
+                </select>
+              </div>
+            ) : null}
             <dl className="metric-list compact">
               <div className="metric-row"><dt>Open positions</dt><dd>{visiblePositions.length}</dd></div>
               <div className="metric-row"><dt>Realized payout</dt><dd>{formatUsd(realizedPayout)}</dd></div>
@@ -1357,37 +1271,6 @@ export default function OperatorTerminal() {
               </div>
               <span className="card-head-r">live</span>
             </div>
-            <div className="graph-stage-toolbar">
-              <div className="graph-mode-row">
-                {['live', 'project', 'simulation', 'graph'].map((mode) => (
-                  <button
-                    key={mode}
-                    className={`mode-btn ${graphMode === mode ? 'active' : ''}`}
-                    onClick={() => {
-                      setGraphMode(mode)
-                      setGraphError('')
-                      setGraphResolvedLabel('')
-                      if (mode === 'live') setContextGraphData(null)
-                    }}
-                  >
-                        {mode === 'live' ? 'Live' : mode === 'project' ? 'Project' : mode === 'simulation' ? 'Sim' : 'Graph'}
-                  </button>
-                ))}
-              </div>
-              {graphMode !== 'live' ? (
-                <div className="graph-source-inline">
-                  <input
-                    className="field-input graph-inline-input"
-                    placeholder={graphSourcePlaceholder}
-                    value={graphSourceValue}
-                    onChange={(event) => setGraphSourceValue(event.target.value)}
-                  />
-                  <button className="secondary-btn" disabled={graphLoading || !graphSourceValue} onClick={loadContextGraph}>
-                    {graphLoading ? 'Loading…' : 'Load Graph'}
-                  </button>
-                </div>
-              ) : null}
-            </div>
             <div className="graph-stage-summary">
               <div className="graph-summary-text">
                 <h3 className="section-title small">Swarm graph</h3>
@@ -1397,8 +1280,8 @@ export default function OperatorTerminal() {
             </div>
             <section className="graph-surface graph-surface-embedded">
               <GraphPanel
-                graphData={activeGraphData}
-                loading={graphMode === 'live' ? classifyLoading : graphLoading}
+                graphData={liveGraphData}
+                loading={classifyLoading}
                 currentPhase={3}
                 isSimulating={streamLoading}
                 onRefresh={refreshGraphSurface}
