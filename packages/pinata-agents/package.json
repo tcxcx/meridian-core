@@ -1,0 +1,13 @@
+{
+  "name": "@repo/pinata-agents",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./index.js",
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  },
+  "dependencies": {
+    "@repo/database": "file:../database"
+  }
+}

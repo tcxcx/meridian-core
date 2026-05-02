@@ -21,6 +21,7 @@
     "@repo/gensyn-axl": "file:../../packages/gensyn-axl",
     "@repo/keeperhub": "file:../../packages/keeperhub",
     "@repo/openclaw": "file:../../packages/openclaw",
+    "@repo/pinata-agents": "file:../../packages/pinata-agents",
     "@repo/polymarket": "file:../../packages/polymarket",
     "@repo/uniswap": "file:../../packages/uniswap",
     "@repo/zero-g": "file:../../packages/zero-g",
