@@ -105,6 +105,7 @@ export default function OperatorTerminal() {
   const [classifyLoading, setClassifyLoading] = useState(false)
   const [signalLoading, setSignalLoading] = useState(false)
   const [streamLoading, setStreamLoading] = useState(false)
+  const [openLoading, setOpenLoading] = useState(false)
 
   const [positions, setPositions] = useState([])
   const [alerts, setAlerts] = useState([])
@@ -530,9 +531,16 @@ export default function OperatorTerminal() {
 
   const openSelectedPosition = async () => {
     if (!selectedMarket || !selectedSignal?.edge) return
+    // E9: in-flight guard. Synchronous re-entry check + state-driven
+    // disabled prop on the CTA. Without this, a double-click fires two
+    // /open requests with different position_ids; the second usually
+    // succeeds against a stale burner-derivation race and ends in a
+    // PrivateSettlementHook revert, looking like a bug to the operator.
+    if (openLoading) return
     const tokenId = lookupTokenId(selectedMarket, selectedSignal.edge.outcome)
     const positionId = crypto.randomUUID ? crypto.randomUUID() : `pos-${Date.now()}`
 
+    setOpenLoading(true)
     try {
       const payload = await readJson(`${EXECUTION_BASE}/api/execution/open`, {
         method: 'POST',
@@ -555,6 +563,8 @@ export default function OperatorTerminal() {
       addAlert(`opened ${shorten(positionId, 10)} for ${formatUsd(openAmount)}`, 'success')
     } catch (error) {
       addAlert(`open failed: ${error.message}`, 'warn')
+    } finally {
+      setOpenLoading(false)
     }
   }
 
@@ -1289,7 +1299,7 @@ export default function OperatorTerminal() {
               <div className="field-inline">
                 <label className="field-label" htmlFor="open-amount">USDC</label>
                 <input id="open-amount" type="number" min="1" step="1" className="field-input small-input" value={openAmount} onChange={(event) => setOpenAmount(Number(event.target.value))} />
-                <button className="primary-btn" disabled={!canOpenSelected} onClick={openSelectedPosition}>Open Position</button>
+                <button className="primary-btn" disabled={!canOpenSelected || openLoading} onClick={openSelectedPosition}>{openLoading ? 'Opening…' : 'Open Position'}</button>
               </div>
             </div>
             <div className="verdict-grid">
