@@ -137,6 +137,7 @@ export default function OperatorTerminal() {
   const [activeCapitalModal, setActiveCapitalModal] = useState('')
 
   const positionsEventSourceRef = useRef(null)
+  const streamingMarketIdRef = useRef(null)
   const swarmEventSourceRef = useRef(null)
   const refreshTimerRef = useRef(null)
   const bootedRef = useRef(false)
@@ -557,6 +558,7 @@ export default function OperatorTerminal() {
       swarmEventSourceRef.current.close()
       swarmEventSourceRef.current = null
     }
+    streamingMarketIdRef.current = null
   }
 
   const appendSwarmFeed = (kind, agent, message) => {
@@ -570,18 +572,24 @@ export default function OperatorTerminal() {
 
   const streamSelectedSignal = () => {
     if (!selectedMarket) return
+    // E5: pin the market this stream belongs to. Every handler closes
+    // over these locals so flipping selectedMarket mid-stream cannot
+    // misroute belief updates or write consensus to the wrong cache.
+    const streamMarketId = selectedMarket.market_id
+    const streamMarketQuestion = selectedMarket.question
     resetSwarmStream()
     setSwarmFeed([])
     setStreamLoading(true)
     setStreamStatus('connecting')
+    streamingMarketIdRef.current = streamMarketId
 
-    const source = new EventSource(`${SIGNAL_BASE}/api/signal/runs/stream?market_id=${encodeURIComponent(selectedMarket.market_id)}`)
+    const source = new EventSource(`${SIGNAL_BASE}/api/signal/runs/stream?market_id=${encodeURIComponent(streamMarketId)}`)
     swarmEventSourceRef.current = source
 
     source.addEventListener('run', (event) => {
       const payload = JSON.parse(event.data)
       setStreamStatus('live')
-      appendSwarmFeed('run', 'run', payload.question || selectedMarket.question)
+      appendSwarmFeed('run', 'run', payload.question || streamMarketQuestion)
     })
     source.addEventListener('start', (event) => {
       const payload = JSON.parse(event.data)
@@ -607,8 +615,8 @@ export default function OperatorTerminal() {
       setStreamStatus('complete')
       setStreamLoading(false)
       resetSwarmStream()
-      await runSignalForMarket(selectedMarket.market_id, { quiet: true })
-      await fetchEntropy()
+      await runSignalForMarket(streamMarketId, { quiet: true })
+      if (streamMarketId === selectedMarketId) await fetchEntropy()
     })
     source.onerror = () => {
       setStreamStatus('offline')
@@ -1180,8 +1188,10 @@ export default function OperatorTerminal() {
               {rankedMarkets.length ? rankedMarkets.map((row) => (
                 <button
                   key={row.market_id}
-                  className={`opportunity-card ${row.market_id === selectedMarketId ? 'active' : ''}`}
+                  className={`opportunity-card ${row.market_id === selectedMarketId ? 'active' : ''} ${streamLoading && row.market_id !== selectedMarketId ? 'is-locked' : ''}`}
                   onClick={() => setSelectedMarketId(row.market_id)}
+                  disabled={streamLoading && row.market_id !== selectedMarketId}
+                  title={streamLoading && row.market_id !== selectedMarketId ? 'Streaming another market — wait for the swarm to finish' : undefined}
                 >
                   <div className="opportunity-head">
                     <span className="opportunity-rank">#{row.rank}</span>
