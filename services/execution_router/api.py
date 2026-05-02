@@ -220,6 +220,28 @@ def create_app() -> Flask:
     trading_chain = os.environ.get("BRIDGE_TRADING_CHAIN", bridge_mod.DEFAULT_TO_CHAIN)
     polygon_first_funding = polygon_funding_mod.funding_mode() in {"polygon-direct", "polygon-modular"}
 
+    def _demo_real_required() -> bool:
+        # E3: pre-demo gate. Set DEMO_REQUIRE_REAL=1 (or true / yes) to
+        # force /open and /resolve to 503 when any sponsor leg would
+        # silently degrade to dry-run / synthetic. The flag protects the
+        # judging-window demo from "looks like success" failures where the
+        # CLOB or bridge silently produced fake tx hashes.
+        return os.environ.get("DEMO_REQUIRE_REAL", "").strip().lower() in ("1", "true", "yes")
+
+    def _check_demo_real_blockers() -> list[str]:
+        """Return a list of human-readable reasons why real-mode would fail."""
+        blockers: list[str] = []
+        if isinstance(bridge, bridge_mod.DryRunBridgeClient):
+            blockers.append("bridge: DryRunBridgeClient (set COGITO_BASE_URL + COGITO_TOKEN to enable real Circle Gateway)")
+        enc_name = type(enc).__name__
+        if enc_name == "DryRunEncryptor":
+            blockers.append("encryptor: DryRunEncryptor (set COGITO_BASE_URL + COGITO_TOKEN to enable cofhejs FHE encryption)")
+        if hook is None:
+            blockers.append("hook: not configured (set MERIDIAN_HOOK_ADDRESS + TREASURY_PRIVATE_KEY)")
+        if factory is None:
+            blockers.append("burner_factory: BURNER_SEED not configured")
+        return blockers
+
     bp = Blueprint("meridian_execution", __name__, url_prefix="/api/execution")
 
     @app.get("/health")
@@ -253,11 +275,23 @@ def create_app() -> Flask:
                 "settlement": settlement_chain,
                 "trading": trading_chain,
             },
+            "demo_require_real": _demo_real_required(),
+            "demo_real_blockers": _check_demo_real_blockers() if _demo_real_required() else [],
             "positions": len(store.list()),
         }
 
     @bp.post("/open")
     def open_position():
+        if _demo_real_required():
+            blockers = _check_demo_real_blockers()
+            if blockers:
+                _audit("demo_require_real.block", status="err",
+                       payload={"endpoint": "/open", "blockers": blockers})
+                return jsonify({
+                    "error": "DEMO_REQUIRE_REAL=1 set but sponsor legs would degrade to dry-run",
+                    "blockers": blockers,
+                    "fix": "unset DEMO_REQUIRE_REAL or fix the listed blockers",
+                }), 503
         body = request.get_json(silent=True) or {}
         position_id = body.get("position_id")
         market_id = body.get("market_id")
@@ -557,6 +591,16 @@ def create_app() -> Flask:
 
     @bp.post("/resolve")
     def resolve_position():
+        if _demo_real_required():
+            blockers = _check_demo_real_blockers()
+            if blockers:
+                _audit("demo_require_real.block", status="err",
+                       payload={"endpoint": "/resolve", "blockers": blockers})
+                return jsonify({
+                    "error": "DEMO_REQUIRE_REAL=1 set but sponsor legs would degrade to dry-run",
+                    "blockers": blockers,
+                    "fix": "unset DEMO_REQUIRE_REAL or fix the listed blockers",
+                }), 503
         body = request.get_json(silent=True) or {}
         position_id = body.get("position_id")
         payout_usdc = body.get("payout_usdc")
