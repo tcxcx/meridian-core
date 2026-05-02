@@ -191,7 +191,7 @@ def create_app() -> Flask:
 
     @app.get("/")
     def root_dashboard():
-        app_url = os.environ.get("MIROSHARK_APP_URL", "http://127.0.0.1:3000/")
+        app_url = os.environ.get("MIROSHARK_APP_URL", "http://127.0.0.1:3301/")
         return redirect(app_url, code=302)
 
     store = PositionStore()
@@ -224,6 +224,15 @@ def create_app() -> Flask:
 
     @app.get("/health")
     def health():
+        # E12: probe the audit DB cheaply so /health distinguishes
+        # "audit module wired" from "audit DB readable right now."
+        audit_healthy = False
+        if audit is not None:
+            try:
+                audit.recent(limit=1)
+                audit_healthy = True
+            except Exception as e:  # noqa: BLE001
+                log.warning("audit health probe failed: %s", e)
         return {
             "service": "Miroshark execution router",
             "status": "ok",
@@ -236,6 +245,7 @@ def create_app() -> Flask:
                 "treasury": hook.treasury_address if hook else None,
                 "bridge": type(bridge).__name__,
                 "audit": audit is not None,
+                "audit_healthy": audit_healthy,
                 "attestation": pinner is not None,
                 "tenants": tenants.ids(),
             },
@@ -1016,11 +1026,12 @@ def create_app() -> Flask:
             if r.status in ("settled", "failed"):
                 continue
             try:
+                prior_status = r.status
                 r.status = "failed"
                 r.error = "killed"
                 store.upsert(r)
                 _audit("kill.invoked", position_id=r.position_id, status="info",
-                       payload={"prior_status": r.status})
+                       payload={"prior_status": prior_status})
                 closed += 1
             except Exception as e:  # noqa: BLE001
                 errors.append({"position_id": r.position_id, "error": str(e)})
