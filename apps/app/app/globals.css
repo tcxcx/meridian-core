@@ -2284,6 +2284,35 @@ button {
   color: var(--gry);
 }
 
+/* E4: trade-in-flight banner — visible during the 60-120s bridge wait */
+.pos-inflight {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--paper, #fafafa);
+  border-left: 3px solid var(--accent, #2a5fff);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.pos-inflight-stage {
+  font-weight: 600;
+  color: var(--ink, #111);
+}
+.pos-inflight-eta,
+.pos-inflight-elapsed {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  color: var(--gry, #666);
+  letter-spacing: 0.02em;
+}
+.pos-inflight-elapsed::before {
+  content: '· ';
+  margin-right: 2px;
+}
+
 .pos-card-grid {
   display: grid;
   grid-template-columns: 0.9fr 1.1fr;

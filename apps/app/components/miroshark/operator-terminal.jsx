@@ -73,6 +73,47 @@ function isActivePosition(position) {
   return !['settled', 'failed'].includes(position?.status)
 }
 
+// E4: stage detector for the trade-in-flight pill. Each return value
+// describes what the system is doing right now, what the operator is
+// waiting on, and the rough ETA. Order of branches matters — earlier
+// branches match earlier lifecycle states.
+function inflightStage(position) {
+  if (!position) return null
+  const status = position.status
+  if (status === 'settled' || status === 'failed') return null
+  // /resolve phase
+  if (status === 'resolving') {
+    if (!position.gateway_deposit_tx) {
+      return { label: 'Depositing payout into Polygon Amoy GatewayWallet', eta: '~10s' }
+    }
+    if (!position.bridge_recv_mint_tx) {
+      return { label: 'Bridging proceeds Amoy → Arb Sepolia via Circle Forwarder', eta: '~60-120s' }
+    }
+    if (!position.settle_tx) {
+      return { label: 'Settling on Arb Sepolia (markResolved + settle)', eta: '~10s' }
+    }
+    return { label: 'Finalizing settlement', eta: '~5s' }
+  }
+  // /open phase
+  if (!position.fund_tx) {
+    return { label: 'Funding burner on Arb Sepolia (encrypted size)', eta: '~10s' }
+  }
+  if (!position.bridge_send_mint_tx) {
+    return { label: 'Bridging USDC Arb Sepolia → Polygon Amoy via Circle Forwarder', eta: '~60-120s' }
+  }
+  if (!position.clob_order_id) {
+    return { label: 'Submitting Polymarket order on Polygon Amoy', eta: '~5s' }
+  }
+  if (status === 'open') return { label: 'Live position — Polymarket CLOB filled', eta: null }
+  return { label: 'Working…', eta: null }
+}
+
+function formatElapsed(seconds) {
+  const s = Math.max(0, Math.floor(seconds))
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
+}
+
 function lookupTokenId(market, outcome) {
   const outcomes = market?.outcomes || []
   const tokenIds = market?.token_ids || []
@@ -106,6 +147,7 @@ export default function OperatorTerminal() {
   const [signalLoading, setSignalLoading] = useState(false)
   const [streamLoading, setStreamLoading] = useState(false)
   const [openLoading, setOpenLoading] = useState(false)
+  const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000))
 
   const [positions, setPositions] = useState([])
   const [alerts, setAlerts] = useState([])
@@ -800,6 +842,17 @@ export default function OperatorTerminal() {
     setAuditEvents(nextEvents)
   }, [selectedPosition, auditByPosition])
 
+  // E4: 1-second tick so the trade-in-flight elapsed counter updates
+  // live during the 60-120s bridge wait. Only ticks while there's at
+  // least one active position to avoid waking the renderer for nothing.
+  useEffect(() => {
+    if (!activeVisiblePositions.length) return
+    const id = window.setInterval(() => {
+      setNowSecs(Math.floor(Date.now() / 1000))
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [activeVisiblePositions.length])
+
   useEffect(() => {
     if (!selectedMarket || !signalCache[selectedMarket.market_id]) return
     fetchEntropy()
@@ -1424,7 +1477,10 @@ export default function OperatorTerminal() {
             <div className="execution-stack">
               {!activeVisiblePositions.length ? <div className="empty-card">No active positions.</div> : null}
 
-              {activeVisiblePositions.map((position) => (
+              {activeVisiblePositions.map((position) => {
+                const stage = inflightStage(position)
+                const elapsed = position.created_at ? nowSecs - Math.floor(position.created_at) : null
+                return (
                 <article key={position.position_id} className={`pos-card ${selectedPosition?.position_id === position.position_id ? 'is-active' : ''}`} onClick={() => setSelectedPositionId(position.position_id)}>
                   <div className="pos-h">
                     <div>
@@ -1435,6 +1491,13 @@ export default function OperatorTerminal() {
                       <span className={`badge ${statusBadgeClass(position.status)}`}>{position.status}</span>
                     </div>
                   </div>
+                  {stage ? (
+                    <div className="pos-inflight">
+                      <span className="pos-inflight-stage">{stage.label}</span>
+                      {stage.eta ? <span className="pos-inflight-eta">{stage.eta}</span> : null}
+                      {elapsed != null ? <span className="pos-inflight-elapsed">elapsed {formatElapsed(elapsed)}</span> : null}
+                    </div>
+                  ) : null}
                   <div className="pos-card-grid">
                     <div className="pos-facts">
                       <table>
@@ -1467,7 +1530,8 @@ export default function OperatorTerminal() {
                     </div>
                   </div>
                 </article>
-              ))}
+                )
+              })}
 
               <div className={`pos-history-h ${showHistory ? 'open' : ''}`} onClick={() => setShowHistory((value) => !value)}>
                 <span className="chev">History</span>
