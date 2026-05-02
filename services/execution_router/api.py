@@ -189,6 +189,32 @@ def create_app() -> Flask:
     # Same-origin in normal use; widen for parity with signal-gateway.
     CORS(app, origins="*")
 
+    # ── Optional bearer-token gate ─────────────────────────────────────────
+    # Set MIROSHARK_AGENT_TOKEN to require Authorization: Bearer <token> on
+    # every /api/execution/* call. Used when the execution-router is exposed
+    # over a public tunnel (ngrok / cloudflared) for the Pinata agent.
+    # /health stays open so the operator dashboard + ngrok inspector + smoke
+    # tests can probe liveness without a token. Static routes also skip.
+    _agent_token = (os.environ.get("MIROSHARK_AGENT_TOKEN") or "").strip()
+
+    @app.before_request
+    def _enforce_agent_token():
+        if not _agent_token:
+            return None
+        path = request.path or ""
+        if path == "/health" or path == "/" or path.startswith("/static/"):
+            return None
+        if request.method == "OPTIONS":
+            return None
+        provided = (request.headers.get("Authorization") or "").strip()
+        expected = f"Bearer {_agent_token}"
+        if provided != expected:
+            return jsonify({
+                "error": "unauthorized",
+                "message": "Set Authorization: Bearer <MIROSHARK_AGENT_TOKEN> on tunneled endpoints.",
+            }), 401
+        return None
+
     @app.get("/")
     def root_dashboard():
         app_url = os.environ.get("MIROSHARK_APP_URL", "http://127.0.0.1:3301/")

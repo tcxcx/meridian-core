@@ -298,6 +298,28 @@ def create_app() -> Flask:
     # Allow all routes (including /health) for testnet/hackathon scope.
     CORS(app, origins="*")
 
+    # ── Optional bearer-token gate (mirror of execution-router) ───────────
+    # Set MIROSHARK_AGENT_TOKEN to require Authorization: Bearer <token> on
+    # every /api/signal/* call. Used when this service is exposed over a
+    # public tunnel for the Pinata agent. /health stays open.
+    _agent_token = (os.environ.get("MIROSHARK_AGENT_TOKEN") or "").strip()
+
+    @app.before_request
+    def _enforce_agent_token():
+        if not _agent_token:
+            return None
+        path = request.path or ""
+        if path == "/health" or request.method == "OPTIONS":
+            return None
+        provided = (request.headers.get("Authorization") or "").strip()
+        expected = f"Bearer {_agent_token}"
+        if provided != expected:
+            return jsonify({
+                "error": "unauthorized",
+                "message": "Set Authorization: Bearer <MIROSHARK_AGENT_TOKEN> on tunneled endpoints.",
+            }), 401
+        return None
+
     @app.get("/health")
     def health():
         zg_status = zg_client.get_client().health()
