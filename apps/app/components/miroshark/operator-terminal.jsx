@@ -148,6 +148,9 @@ export default function OperatorTerminal() {
   const [streamLoading, setStreamLoading] = useState(false)
   const [openLoading, setOpenLoading] = useState(false)
   const [nowSecs, setNowSecs] = useState(() => Math.floor(Date.now() / 1000))
+  const [pinataConnector, setPinataConnector] = useState(null)
+  const [pinataLoading, setPinataLoading] = useState(false)
+  const [chatPanel, setChatPanel] = useState({ open: false, url: '', title: '' })
 
   const [positions, setPositions] = useState([])
   const [alerts, setAlerts] = useState([])
@@ -286,6 +289,15 @@ export default function OperatorTerminal() {
   const executionOnline = routerHealth?.status === 'ok'
   const signalOnline = signalHealth?.status === 'ok'
   const openclawEnabled = Boolean(operatorStatus?.automation?.openclaw_enabled || operatorStatus?.automation?.openclaw_session)
+  const pinataConnected = Boolean(pinataConnector?.connected)
+  const pinataRunState = pinataConnector?.runState || 'idle'
+  const pinataPillTone = pinataConnected
+    ? (pinataRunState === 'running' ? '' : (pinataRunState === 'error' ? 'warn' : ''))
+    : 'warn'
+  const pinataPillLabel = !pinataConnected
+    ? 'pinata not connected'
+    : `pinata ${pinataRunState}`
+  const pinataAutonomousNext = pinataRunState === 'running' ? 'paused' : 'running'
   const canOpenSelected = Boolean(selectedMarket && selectedSignal?.edge && openAmount > 0)
   const topologyStats = topologyData
     ? `${topologyData?.edges?.length || 0} edges · ${topologyData?.clusters?.length || 0} clusters`
@@ -404,6 +416,7 @@ export default function OperatorTerminal() {
     }
 
     await fetchGatewayBalance({ silent: true })
+    await fetchPinataStatus({ silent: true })
   }
 
   const fetchTerminalTicker = async ({ silent = false } = {}) => {
@@ -429,6 +442,44 @@ export default function OperatorTerminal() {
       setGatewayBalance(null)
       if (!silent) addAlert(`gateway balance unavailable: ${error.message}`, 'warn')
     }
+  }
+
+  const fetchPinataStatus = async ({ silent = true } = {}) => {
+    try {
+      const payload = await readJson('/api/pinata/status')
+      setPinataConnector(payload?.connector || null)
+      return payload?.connector || null
+    } catch (error) {
+      setPinataConnector(null)
+      if (!silent) addAlert(`pinata status unavailable: ${error.message}`, 'warn')
+      return null
+    }
+  }
+
+  const setPinataRunState = async (runState) => {
+    setPinataLoading(true)
+    try {
+      const payload = await readJson('/api/pinata/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runState }),
+      })
+      setPinataConnector(payload?.connector || null)
+      addAlert(`pinata agent → ${runState}`, runState === 'running' ? 'success' : 'info')
+    } catch (error) {
+      addAlert(`pinata activate failed: ${error.message}`, 'warn')
+    } finally {
+      setPinataLoading(false)
+    }
+  }
+
+  const openChatPanel = (url, title) => {
+    if (!url) return
+    setChatPanel({ open: true, url, title: title || 'Pinata Agent' })
+  }
+
+  const closeChatPanel = () => {
+    setChatPanel({ open: false, url: '', title: '' })
   }
 
   const loadTenants = async () => {
@@ -910,7 +961,19 @@ export default function OperatorTerminal() {
           <span className="status-pill">{chainLabel}</span>
           <span className={`status-pill ${signalOnline ? '' : 'warn'}`}>signal {signalOnline ? 'online' : 'offline'}</span>
           <span className={`status-pill ${executionOnline ? '' : 'warn'}`}>router {executionOnline ? 'online' : 'offline'}</span>
-          <span className={`status-pill ${openclawEnabled ? '' : 'warn'}`}>openclaw {openclawEnabled ? 'ready' : 'manual'}</span>
+          <span className={`status-pill ${pinataPillTone}`} title={pinataConnector?.agentChatUrl || ''}>{pinataPillLabel}</span>
+          {pinataConnector?.telegramHandle ? (
+            <a
+              className="status-pill status-pill-link"
+              href={pinataConnector.telegramUrl || `https://t.me/${pinataConnector.telegramHandle.replace(/^@/, '')}`}
+              target="_blank"
+              rel="noreferrer"
+              title="Open paired Telegram bot"
+            >tg {pinataConnector.telegramHandle}</a>
+          ) : null}
+          {openclawEnabled ? (
+            <span className="status-pill" title="Legacy OpenClaw connector still active">openclaw legacy</span>
+          ) : null}
         </div>
       </header>
 
@@ -997,6 +1060,47 @@ export default function OperatorTerminal() {
               <div className="metric-row"><dt>Per position</dt><dd>{formatUsd(capitalPolicy.per_position_max_usdc || operatorStatus.capital?.per_position_max || 0)}</dd></div>
               <div className="metric-row"><dt>Threshold</dt><dd>{readinessThresholdLabel}</dd></div>
             </dl>
+            <div className="capital-subsection">
+              <div className="capital-subhead">Autonomous mode (Pinata Agent)</div>
+              {pinataConnected ? (
+                <>
+                  <div className="autonomous-row">
+                    <span className={`autonomous-state s-${pinataRunState}`}>{pinataRunState}</span>
+                    <span className="autonomous-meta">
+                      {pinataConnector?.agentTemplate || 'agent'} · {shorten(pinataConnector?.agentId || '—', 10)}
+                    </span>
+                  </div>
+                  <div className="autonomous-actions">
+                    <button
+                      type="button"
+                      className="primary-btn small-btn"
+                      disabled={pinataLoading}
+                      onClick={() => setPinataRunState(pinataAutonomousNext)}
+                    >
+                      {pinataLoading ? 'Updating…' : (pinataRunState === 'running' ? 'Pause autonomous' : 'Activate autonomous')}
+                    </button>
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      disabled={!pinataConnector?.agentChatUrl}
+                      onClick={() => openChatPanel(pinataConnector?.agentChatUrl, 'Trader Agent')}
+                    >Chat</button>
+                    {pinataConnector?.telegramHandle ? (
+                      <a
+                        className="mini-btn"
+                        href={pinataConnector.telegramUrl || `https://t.me/${pinataConnector.telegramHandle.replace(/^@/, '')}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >Telegram</a>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <div className="autonomous-empty">
+                  Pinata agent not connected. Visit <a href="/setup/openclaw">setup</a> to deploy and pair the Polymarket trader template.
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="rail-card accent-card">
@@ -1129,6 +1233,14 @@ export default function OperatorTerminal() {
                 <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('bridge')}>Bridge</button>
                 <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('swap')}>Swap</button>
                 <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('treasury')}>Treasury</button>
+                {pinataConnector?.onrampChatUrl ? (
+                  <button
+                    type="button"
+                    className="mini-btn mini-btn-accent"
+                    onClick={() => openChatPanel(pinataConnector.onrampChatUrl, 'MoonPay Onramp')}
+                    title="Buy USDC with card via Pinata MoonPay agent"
+                  >Fund via MoonPay</button>
+                ) : null}
               </div>
             </div>
             <div className="capital-subsection">
@@ -1585,7 +1697,33 @@ export default function OperatorTerminal() {
         modal={activeCapitalModal}
         onClose={() => setActiveCapitalModal('')}
         capitalPlane={capitalPlane}
+        pinataConnector={pinataConnector}
+        onOpenChat={openChatPanel}
       />
+
+      {chatPanel.open ? (
+        <aside className="pinata-chat-panel" role="dialog" aria-label={`${chatPanel.title} chat`}>
+          <header className="pinata-chat-head">
+            <div>
+              <span className="pinata-chat-title">{chatPanel.title}</span>
+              <span className="pinata-chat-sub">Pinata Agents</span>
+            </div>
+            <div className="pinata-chat-actions">
+              <a className="mini-btn" href={chatPanel.url} target="_blank" rel="noreferrer">Open in tab</a>
+              <button type="button" className="mini-btn" onClick={closeChatPanel}>Close</button>
+            </div>
+          </header>
+          <iframe
+            className="pinata-chat-iframe"
+            src={chatPanel.url}
+            title={chatPanel.title}
+            allow="clipboard-write; clipboard-read; payment"
+          />
+          <footer className="pinata-chat-foot">
+            If the chat does not load, the agent host blocks iframes — use “Open in tab”.
+          </footer>
+        </aside>
+      ) : null}
     </div>
   )
 }

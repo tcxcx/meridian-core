@@ -2284,6 +2284,106 @@ button {
   color: var(--gry);
 }
 
+/* Pinata Agents — autonomous-mode controls in LOOP card */
+.autonomous-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 11px;
+}
+.autonomous-state {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+}
+.autonomous-state.s-running { color: #167b3a; }
+.autonomous-state.s-paused  { color: #8a6d00; }
+.autonomous-state.s-error   { color: #b32424; }
+.autonomous-state.s-deployed,
+.autonomous-state.s-idle    { color: var(--gry, #666); }
+.autonomous-meta {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  color: var(--gry, #666);
+}
+.autonomous-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.autonomous-empty {
+  font-size: 11px;
+  color: var(--gry, #666);
+  margin-top: 4px;
+}
+.status-pill-link {
+  text-decoration: none;
+}
+.mini-btn-accent {
+  border-color: var(--accent, #2a5fff);
+  color: var(--accent, #2a5fff);
+}
+.small-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+
+/* Pinata Agents — full-height chat side panel (paired with Telegram) */
+.pinata-chat-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(420px, 100vw);
+  height: 100vh;
+  z-index: 60;
+  background: var(--paper, #fff);
+  border-left: 1px solid var(--border, #e2e2e2);
+  box-shadow: -8px 0 24px rgba(0,0,0,0.08);
+  display: flex;
+  flex-direction: column;
+}
+.pinata-chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border, #e2e2e2);
+  gap: 8px;
+}
+.pinata-chat-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.pinata-chat-sub {
+  display: block;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  color: var(--gry, #666);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pinata-chat-actions {
+  display: flex;
+  gap: 6px;
+}
+.pinata-chat-iframe {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: var(--paper, #fff);
+}
+.pinata-chat-foot {
+  padding: 8px 12px;
+  font-size: 10px;
+  color: var(--gry, #666);
+  border-top: 1px solid var(--border, #e2e2e2);
+}
+
 /* E4: trade-in-flight banner — visible during the 60-120s bridge wait */
 .pos-inflight {
   display: flex;
