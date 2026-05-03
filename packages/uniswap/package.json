@@ -1,1 +1,11 @@
-{ "name": "@repo/uniswap", "version": "0.0.0", "private": true }
+{
+  "name": "@repo/uniswap",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./trading-api": "./trading-api.js"
+  }
+}

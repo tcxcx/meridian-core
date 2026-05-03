@@ -12,6 +12,10 @@ const isPublicRoute = createRouteMatcher([
   '/api/circle/execute',
   // Public read-only ENS resolution — no secrets returned, mainnet-aware.
   '/api/ens/resolve',
+  // Bearer-gated by MIROSHARK_AGENT_TOKEN — Pinata agent + execution_router
+  // call these to quote/calldata Uniswap swaps without a Clerk session.
+  '/api/uniswap/quote',
+  '/api/uniswap/calldata',
 ])
 const isProtectedPageRoute = createRouteMatcher(['/setup(.*)'])
 const isProtectedApiRoute = createRouteMatcher(['/api/(.*)'])

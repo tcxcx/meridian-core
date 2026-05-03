@@ -2,6 +2,7 @@
 
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { UserButton } from '@clerk/nextjs'
 
 import AddFundDialog from '@/components/miroshark/add-fund-dialog'
 import AgentPanel from '@/components/miroshark/agent-panel'
@@ -1345,6 +1346,10 @@ export default function OperatorTerminal() {
             pos {shorten(activeStreamingPosition.position_id, 10)} ▸ {formatElapsed(activeStreamElapsed || 0)}
           </button>
         ) : null}
+
+        <div className="lean-user-button">
+          <UserButton afterSignOutUrl="/sign-in" appearance={{ elements: { avatarBox: 'lean-user-avatar' } }} />
+        </div>
       </header>
 
       {/* NEWSWIRE BAND */}

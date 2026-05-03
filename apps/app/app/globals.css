@@ -3382,6 +3382,20 @@ button {
 }
 .lean-active-pos:hover { background: rgba(255, 255, 255, 0.08); }
 
+.lean-user-button {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+.lean-active-pos + .lean-user-button,
+.lean-pending-pill + .lean-user-button {
+  margin-left: 12px;
+}
+.lean-user-button .lean-user-avatar {
+  width: 28px;
+  height: 28px;
+}
+
 /* NEWSWIRE — single row, scrolling */
 .lean-news {
   border-bottom: 1px solid var(--gry-2);
