@@ -22,17 +22,10 @@ export default async function Page({ searchParams }) {
     resolveWalletTopology(),
     readTreasuryWalletState(),
   ])
-  const setup = platformState.setup || {}
-  const setupComplete = Boolean(
-    setup.workspaceBootstrapped
-    && (setup.treasuryProvisioned || treasuryWallet?.walletAddress)
-    && (setup.tradingWalletReady || walletTopology.agent.address)
-    && setup.collaborationReady
-  )
-
-  if (!setupComplete && !onboardingMode) {
-    redirect('/setup')
-  }
+  // Setup gate is opt-in via ?onboarding=1 — every signed-in user lands on
+  // the operator terminal. The /setup wizard is still reachable directly
+  // for users who want to complete the full provisioning flow.
+  void platformState; void walletTopology; void treasuryWallet; void onboardingMode
 
   return <OperatorTerminal />
 }
