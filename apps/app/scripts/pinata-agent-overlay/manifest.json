@@ -1,0 +1,72 @@
+{
+  "$schema": "https://agents.pinata.cloud/schemas/manifest.v1.json",
+  "version": 1,
+  "agent": {
+    "name": "MoonPay Prediction Market Trader",
+    "description": "# MoonPay Prediction Market Trader\n\nAn autonomous prediction market agent powered by the [MoonPay CLI](https://www.moonpay.com). Scans Polymarket and Kalshi for mispricings, forms a thesis, places positions, and monitors your book — automatically.\n\n## What it does\n\n- **Market discovery** — trending markets by volume, search by keyword, browse by category\n- **Research** — price history, market depth, outcome analysis\n- **Trading** — buy and sell YES/NO shares on Polymarket and Kalshi\n- **Book monitoring** — tracks open positions, flags movers, and alerts when markets resolve\n- **PnL tracking** — running profit/loss across all open and closed positions\n- **Auto-redeem** — prompts to redeem winning positions when markets resolve\n\n## Example prompts\n\n**Research**\n> \"What are the top 10 markets by volume on Polymarket right now?\"\n\n> \"Show me all crypto-related markets on Kalshi\"\n\n**Analysis**\n> \"Walk me through the Trump 2028 market — what's the current price and how has it moved?\"\n\n**Trading**\n> \"Buy 100 YES shares on the Bitcoin ETF approval market at 0.72\"\n\n> \"Sell half my position on the Fed rate cut market\"\n\n**Monitoring**\n> \"How's my book looking? Any positions that moved?\"\n\n> \"What's my total PnL on Polymarket?\"\n\n## How it works\n\n1. Deploy the template on Pinata and open the chat\n2. The agent introduces itself and logs into MoonPay\n3. Create or connect a wallet (EVM for Polymarket, Solana for Kalshi)\n4. Register your wallet with the provider (one-time)\n5. Fund with USDC — the agent generates a fiat checkout link if needed\n6. Start trading — the agent surfaces opportunities and executes with your confirmation\n\nEvery position entry includes a full trade confirmation: market, outcome, price, size, cost, and your thesis before anything executes.\n\n## Setup\n\nAfter deploying, open the chat. The agent walks through:\n\n1. MoonPay login (email + OTP)\n2. Wallet setup (EVM + Solana)\n3. Provider registration\n4. USDC funding\n\n### Required secrets\n\n| Secret | Where to get it |\n|--------|----------------|\n| `MOONPAY_EMAIL` | Your email — used for CLI login OTP |\n\n## Providers\n\n| Provider | Chain | Currency |\n|----------|-------|----------|\n| Polymarket | Polygon | USDC.e |\n| Kalshi | Solana | USDC |\n\n## Powered by\n\n- [MoonPay CLI](https://www.moonpay.com) — wallets, prediction market trading, fiat funding\n- [Polymarket](https://polymarket.com) — on-chain prediction markets\n- [Kalshi](https://kalshi.com) — regulated event contracts",
+    "vibe": "analytical, contrarian, risk-aware, never bets without showing the thesis",
+    "emoji": "📊"
+  },
+  "template": {
+    "slug": "moonpay-prediction-trader",
+    "category": "defi",
+    "tags": [
+      "moonpay",
+      "prediction-markets",
+      "polymarket",
+      "kalshi",
+      "trading",
+      "monitoring"
+    ],
+    "authorName": "MoonPay",
+    "authorUrl": "https://www.moonpay.com",
+    "authorLogoUrl": "https://cdn.moonpay.com/moonpay-logo.png"
+  },
+  "secrets": [
+    {
+      "name": "MOONPAY_EMAIL"
+    },
+    {
+      "name": "OPENAI_OAUTH_TOKEN"
+    },
+    {
+      "name": "MIROSHARK_SIGNAL_URL"
+    },
+    {
+      "name": "MIROSHARK_EXECUTION_URL"
+    },
+    {
+      "name": "MIROSHARK_COGITO_URL"
+    },
+    {
+      "name": "MIROSHARK_API_TOKEN"
+    },
+    {
+      "name": "MIROSHARK_TENANT_ID"
+    }
+  ],
+  "scripts": {
+    "build": "bash setup.sh",
+    "start": ""
+  },
+  "tasks": [
+    {
+      "name": "miroshark-book-check",
+      "prompt": "MiroShark book review. Read MIROSHARK.md and skills/miroshark.md if not already in context. Then: (1) curl /health on $MIROSHARK_EXECUTION_URL — note demo_require_real flag, audit_healthy, RPC status. (2) curl /api/execution/positions — diff against last snapshot in book.md, flag movers (price change >10% from entry), flag any that hit 'settled' since last check. (3) For positions in transit (status=funding|resolving), read /api/execution/audit/<id> and report which lifecycle stage (e.g. 'still bridging Arb→Amoy via Forwarder, ~Ns elapsed'). (4) Compute PnL on settled positions (sum of payout_usdc - usdc_amount). (5) Update book.md. Lead the report with what changed. Skip the discovery step on this task — that's morning-markets.",
+      "schedule": "0 * * * *",
+      "enabled": true
+    },
+    {
+      "name": "miroshark-morning-markets",
+      "prompt": "Morning market scan inside MiroShark. (1) curl /api/execution/operator/status — note thresholds.directional_min_edge_pp + thresholds.directional_min_confidence + capital_plane.policy.per_position_max_usdc + automation.kill_switch_enabled. If kill_switch is enabled, stop and tell Tomas. (2) curl /api/signal/markets/scan with limit=10 (preferred) OR mp prediction-market market trending list --provider polymarket --limit 10 as fallback. (3) For each of the top 5 candidates, call /api/signal/run on $MIROSHARK_SIGNAL_URL to get the AXL swarm thesis. (4) Filter to candidates where edge_pp ≥ threshold AND confidence ≥ threshold. (5) Surface the top 3 with: market, swarm verdict (outcome + edge_pp + confidence), key_factors, suggested usdc_amount (≤ per_position_max_usdc), and the 'encrypted size via Fhenix CoFHE' privacy line. Do NOT place trades — Tomas confirms before any /api/execution/open.",
+      "schedule": "0 8 * * *",
+      "enabled": true
+    },
+    {
+      "name": "miroshark-resolve-sweep",
+      "prompt": "Mid-day sweep for resolved markets. curl /api/execution/positions, filter status='open'. For each open position, check if the underlying Polymarket market has resolved (use mp prediction-market market event retrieve --slug <slug> from the position's market_id; the response includes resolution status). For any resolved position, compute the actual payout_usdc the burner received from Polymarket (winner gets full share count × $1, loser gets 0), confirm with Tomas, then call POST /api/execution/resolve {position_id, payout_usdc}. Stream the audit events to Tomas as the bridge-back + settle land. Update book.md.",
+      "schedule": "0 14 * * *",
+      "enabled": true
+    }
+  ]
+}
