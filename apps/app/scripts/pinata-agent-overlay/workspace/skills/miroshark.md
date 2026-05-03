@@ -84,7 +84,7 @@ Use the `market_id` and `token_ids[0]` (YES) / `token_ids[1]` (NO) for the next 
 You can still use `mp prediction-market market trending list --provider polymarket --limit 10` — same data, different rail. Use whichever is faster on demo day.
 
 ### POST `${MIROSHARK_SIGNAL_URL}/api/signal/run`
-Run the AXL swarm on a single market. Returns the swarm consensus + edge. **This is the thesis you lead every trade card with.**
+Run the AXL swarm on a single market. Returns swarm consensus + edge + disagreement signals. **This is the thesis you lead every trade card with.**
 
 ```bash
 curl -s -X POST -H "Content-Type: application/json" \
@@ -94,15 +94,20 @@ curl -s -X POST -H "Content-Type: application/json" \
 ```
 
 Response highlights:
-- `phase` — should start with `"2-axl-mesh"` for full multi-node consensus
-- `confidence` — float 0..1
-- `edge` — `{ outcome: "YES" | "NO", edge_pp: 4.2 }` (positive percentage points vs market price)
-- `key_factors[]` — short bullet strings the swarm reasoned about
-- `reasoning` — paragraph from the swarm consensus
+- `phase` — starts with `"2-axl-mesh"` for full multi-node consensus
+- `confidence` — float 0..1, **disagreement-penalised**. When the swarm is split (mean pairwise L1 > 0.30) this gets multiplied down by up to 0.5x. Use this for thresholding.
+- `raw_confidence` — unpenalised mean. The gap between this and `confidence` is itself a signal: a large gap means agents felt sure individually but disagreed with each other.
+- `agreement_score` — 1.0 unanimous → 0.0 max spread. Surface this in your trade card. > 0.85 = aligned, 0.70-0.85 = soft consensus, < 0.70 = real split.
+- `minority_report` — `null` when aligned; otherwise `{agent_id, confidence, probabilities, distance_from_consensus, reasoning}` for the strongest confident dissenter. **Always quote the minority view in your trade card when present** — it's the most useful single piece of context Tomas can have.
+- `edge` — `{ outcome: "YES" | "NO", edge_pp: 4.2 }` (percentage points vs market price)
+- `key_factors[]` — short bullet strings; per-agent decompositions + signal-driven adjustments
+- `reasoning` — paragraph from the highest-confidence agent
 - `attestation_envelope` — present when 0G Storage pinning is healthy
-- `seed_hash_0g` / `simulation_hash_0g` — non-null when 0G Storage is up (faucet-dependent)
+- `seed_hash_0g` / `simulation_hash_0g` — non-null when 0G Storage is up
 
-If `edge.edge_pp < operator_status.thresholds.directional_min_edge_pp` OR `confidence < thresholds.directional_min_confidence`, **don't recommend the trade** — Tomas's threshold gate would reject it anyway.
+**What the swarm now reasons about** (Phase 6 upgrade per polymarket/agents framework + Tetlock superforecaster patterns): each agent sees order-book microstructure (per-outcome spread, depth, entropy tier), correlated-market list (T-03), and cryo anomaly flag (C-02) inside its prompt. They follow a 5-step methodology silently — decompose → base-rate → inside view → update on signals → probabilistic — and apply concrete penalties: discount edge by ≥50% on entropy tier 2, soft-penalise confidence on tier 1, treat sudden cryo freezes as small-size-fast-exit territory, downsize on correlated-market exposure. The persona pool is also category-aware: politics markets get more geopolitical analysts, finance markets get more macro/vol-trader lenses, crypto markets get on-chain/narrative specialists.
+
+**Threshold rule:** if `confidence < operator_status.thresholds.directional_min_confidence` OR `abs(edge.edge_pp) < operator_status.thresholds.directional_min_edge_pp`, **don't recommend the trade**. Always check `agreement_score` — even if confidence passes, agreement_score < 0.65 = treat as amber, walk Tomas through both sides before calling it.
 
 ### GET `${MIROSHARK_SIGNAL_URL}/api/signal/runs/stream?market_id=<id>` (SSE)
 Live debate stream for one market. Event types: `run`, `start`, `belief`, `agent_error`, `result`. Use only when Tomas explicitly asks "show me the swarm debate" — for normal flow, the synchronous `/run` endpoint is enough.
@@ -258,22 +263,33 @@ When proposing a trade, use this template (replaces the one in SOUL.md):
 Market: <title>                              [via Polymarket on Polygon Amoy]
 Outcome: YES / NO                            [token_id ... ]
 Price: $0.65 per share (implies 65% probability)
-Size: 7.5 USDC
-Cost: 7.5 USDC                                [paid by burner EOA, derived per-position]
+Size: 0.5 USDC
+Cost: 0.5 USDC                                [paid by burner EOA, derived per-position]
 
-Swarm verdict (MiroShark AXL): YES @ 5.2pp edge, 0.71 confidence
+Swarm verdict (MiroShark AXL):
+  consensus: YES @ 5.2pp edge
+  confidence: 0.71 (raw 0.78 → 0.71 after disagreement penalty)
+  agreement_score: 0.82  (soft consensus)
 Key factors:
   • <factor 1 from /signal/run key_factors>
   • <factor 2>
   • <factor 3>
 
-Privacy: encrypted size via Fhenix CoFHE hook (size never appears on-chain in cleartext)
+Minority report (if not null):
+  agent <id> bet <opposite outcome> at <conf> — <reasoning quoted verbatim>
+
+Privacy: encrypted size via Uniswap v4 hook (size never appears on-chain in cleartext)
 Settlement rail: Circle Gateway (Arb Sepolia ↔ Polygon Amoy), ~60-120s bridge wait
 
-Max profit: $4.04 (if resolves YES)
-Max loss: $7.5 (if resolves NO)
+Max profit: $0.27 (if resolves YES at $0.65 → $1.00)
+Max loss:   $0.50 (if resolves NO)
 
 Confirm? (yes / no)
 ```
 
-On `yes`, fire `POST /api/execution/open`. Stream the audit events to Tomas as they land. Update book.md with the position_id + status.
+Decision rules baked into the template:
+- If `agreement_score < 0.65` → call out as "split swarm — recommend smaller size or pass."
+- If `minority_report` is non-null AND its `confidence` ≥ 0.7 → quote it verbatim. Tomas wants to see the strongest opposing view.
+- If `confidence < operator_status.thresholds.directional_min_confidence` OR `abs(edge_pp) < operator_status.thresholds.directional_min_edge_pp` → don't propose the trade at all.
+
+On `yes`, fire `POST /api/execution/open`. Stream the audit events to Tomas as they land. Update book.md with the position_id + status + the swarm verdict (so future heartbeats can compare actual outcome vs prediction = calibration data over time).
