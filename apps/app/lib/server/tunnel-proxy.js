@@ -34,6 +34,10 @@ const HOP_BY_HOP = new Set([
   'proxy-authenticate', 'proxy-authorization',
   // We override these:
   'host', 'authorization', 'content-length',
+  // Node's fetch auto-decompresses upstream bodies — keeping content-encoding
+  // would tell the client to decompress already-decompressed bytes (Vercel
+  // returned an empty body in this case).
+  'content-encoding',
 ])
 
 function copyRequestHeaders(request) {
