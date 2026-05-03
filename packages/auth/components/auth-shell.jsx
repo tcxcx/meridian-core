@@ -61,25 +61,24 @@ export function AuthShell({
             </nav>
           </header>
 
-          <main className="auth-grid">
+          <main className="auth-grid auth-grid-single">
             <section className="auth-manifesto auth-reveal" data-step="1">
               <div className="auth-kicker-row">
                 <span className="auth-mini-kicker">{mode}</span>
-                <span className="auth-chip">Polygon-first</span>
                 <span className="auth-chip">Passkey custody</span>
               </div>
               <h1 className="auth-title">{title}</h1>
               <p className="auth-copy">{description}</p>
+
+              <div className="auth-manifesto-clerk">
+                {children}
+              </div>
 
               <div className="auth-plain-points">
                 {ENTRY_POINTS.map((point) => (
                   <span key={point}>{point}</span>
                 ))}
               </div>
-            </section>
-
-            <section className="auth-card-wrap auth-reveal" data-step="2">
-              {children}
             </section>
           </main>
 

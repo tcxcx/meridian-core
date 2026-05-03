@@ -4287,3 +4287,23 @@ button {
 }
 .msk-provider-badge.is-circle-dcw   { background: var(--blu); color: #fff; }
 .msk-provider-badge.is-seed-derived { background: var(--gry-3); color: var(--gry); border: 1px solid var(--gry-2); }
+
+/* Single-panel auth layout — Clerk widget centered inside the manifesto panel */
+.auth-grid.auth-grid-single {
+  grid-template-columns: minmax(0, 880px);
+  justify-content: center;
+}
+.auth-grid.auth-grid-single .auth-manifesto {
+  align-items: stretch;
+}
+.auth-manifesto-clerk {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0 4px;
+}
+.auth-manifesto-clerk .auth-card-shell {
+  width: 100%;
+  max-width: 460px;
+  border: 1px solid var(--blu);
+  background: rgba(255, 255, 255, 0.95);
+}
