@@ -33,18 +33,15 @@ const nextConfig = {
     '@repo/zero-g',
   ],
   async rewrites() {
+    // /signal/* and /execution/* are handled by app/signal/[...path]/route.js
+    // and app/execution/[...path]/route.js — the route handlers proxy through
+    // tunnel-proxy.js which injects the bearer token. Keeping a rewrite here
+    // would shadow the route on Vercel because afterFiles rewrites resolve
+    // before dynamic catch-all routes (DNS_HOSTNAME_RESOLVED_PRIVATE on prod).
     return [
       {
         source: '/backend/:path*',
         destination: `${serviceHost}:5001/:path*`,
-      },
-      {
-        source: '/signal/:path*',
-        destination: `${serviceHost}:5002/:path*`,
-      },
-      {
-        source: '/execution/:path*',
-        destination: `${serviceHost}:5004/:path*`,
       },
     ]
   },
