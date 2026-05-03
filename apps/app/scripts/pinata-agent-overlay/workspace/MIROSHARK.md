@@ -128,7 +128,18 @@ Tomas may set `DEMO_REQUIRE_REAL=1` on the execution-router before judging. When
 
 ## Tenants
 
-MiroShark supports multi-tenant funds (Bucket 6). For Tomas's solo deployment, always use `tenant_id: "default"` unless he tells you otherwise. `GET /api/execution/tenants` lists what's configured. Each tenant has its own burner derivation + per-position max + allowed strategies.
+MiroShark supports multi-tenant funds (Bucket 6). **Always call `GET /api/execution/tenants` first to see what's registered** — do not assume `default` exists. When `TENANTS` is set in the operator's `.env`, the registry holds explicit funds and the `default` fallback is disabled. Each tenant has its own burner derivation + per-position max USDC cap + allowed strategy whitelist.
+
+For Tomas's current deployment (verified 2026-05-02 via `/api/execution/tenants`):
+
+| tenant_id | label | capital | per-position max | strategies allowed |
+|---|---|---|---|---|
+| `fund-a` | Internal Treasury | $250 USDC | $20 | `arb`, `directional` |
+| `fund-b` | Fund B | $100 USDC | $5 | `arb` only |
+
+For directional trades use `fund-a`. For arb-only strategies either fund works (size accordingly). Always check `per_position_max_usdc` on the chosen tenant before sizing — exceeding it returns `422`. Trying a strategy not in the tenant's whitelist returns `403` with `allowed_strategies` in the body.
+
+If you get `403 unknown tenant_id: '<id>'` with `known_tenants: [...]`, the operator changed the registry — pick from the returned list and tell Tomas which tenants are live so he can confirm the right one. Do not silently fall back to a different tenant.
 
 ---
 
