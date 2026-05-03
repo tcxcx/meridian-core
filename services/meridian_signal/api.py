@@ -16,6 +16,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import asdict as _asdict
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -67,7 +68,44 @@ def run_signal():
     if market is None:
         return jsonify({"error": f"market not found: {market_id}"}), 404
 
-    seed_doc = seed.build_seed_document(market)
+    # Phase 6: pre-fetch every Polymarket signal we already compute, BEFORE
+    # building seed_doc. The swarm has historically been blind to order-book
+    # microstructure (entropy/spread/depth), cross-market correlations
+    # (T-03 topology), and freeze anomalies (C-02 cryo). Bake them in so
+    # agents can reason ABOUT these signals instead of about prices alone.
+    entropy_per_outcome: dict[str, dict] = {}
+    if market.token_ids:
+        for outcome, token_id in zip(market.outcomes, market.token_ids):
+            try:
+                reading = entropy.read(token_id)
+                entropy_per_outcome[outcome] = reading.to_dict()
+            except Exception as e:  # noqa: BLE001 — never block run
+                log.warning("entropy pre-fetch failed for %s/%s: %s", market.market_id, outcome, e)
+
+    correlations_for_seed: list[dict] = []
+    if market.token_ids:
+        try:
+            correlations_for_seed = topology.correlated_with(market.token_ids[0])
+        except Exception as e:  # noqa: BLE001
+            log.warning("topology pre-fetch failed for %s: %s", market.market_id, e)
+
+    cryo_flag_for_seed: dict | None = None
+    try:
+        # cryo.scan returns recent latched markets; check if THIS one is in it.
+        rows = cryo.scan(limit=50, min_liquidity_usd=0.0)
+        for row in rows:
+            if getattr(row, "market_id", None) == market.market_id:
+                cryo_flag_for_seed = row.to_dict() if hasattr(row, "to_dict") else _asdict(row)
+                break
+    except Exception as e:  # noqa: BLE001
+        log.warning("cryo pre-fetch failed for %s: %s", market.market_id, e)
+
+    seed_doc = seed.build_seed_document(
+        market,
+        entropy_per_outcome=entropy_per_outcome or None,
+        correlations=correlations_for_seed or None,
+        cryo_flag=cryo_flag_for_seed,
+    )
     run_id = str(uuid.uuid4())
 
     # Phase 3: pin seed_doc to 0G Storage (best-effort — null on failure).
