@@ -71,27 +71,124 @@ def reset_inboxes() -> None:
     with _INBOX_LOCK:
         _NODE_INBOXES.clear()
 
-_PERSONAS = [
-    "a contrarian quant who shorts narrative trades",
-    "a base-rate forecaster who anchors on prior frequencies",
-    "a geopolitical analyst tracking real-world signals",
-    "a market microstructure specialist watching order flow",
-    "a Bayesian who updates aggressively on new evidence",
-    "a momentum trader who follows market consensus",
-    "a value investor who fades extreme prices",
-    "a news-driven trader who weights recency heavily",
+# ── Persona library ────────────────────────────────────────────────────────
+# Each persona is (label, lens). The lens shapes what the agent prioritises
+# when it reasons about the market. Personas are pulled from a category-aware
+# pool: politics markets get more geopolitical analysts, financial markets
+# get more quants, etc. Falls back to the full pool when category can't be
+# inferred from the question text.
+
+_PERSONAS_CORE = [
+    ("contrarian-quant", "a contrarian quant who shorts narrative trades; you fade hype and lean into orderbook signals"),
+    ("base-rate", "a Tetlock-style base-rate forecaster who anchors on prior frequencies and reference classes"),
+    ("microstructure", "a market-microstructure specialist who treats order book entropy, spread, and depth as primary signals"),
+    ("bayesian", "a Bayesian updater who sets a prior, lists 3 evidence buckets, and updates explicitly"),
+    ("value", "a value investor who fades extreme prices and asks 'what would have to be true for this to be wrong?'"),
+]
+_PERSONAS_POLITICS = [
+    ("geopolitical", "a geopolitical analyst tracking real-world signals: polls, news cycle, base rates of incumbency"),
+    ("political-historian", "a political historian who anchors on similar elections / appointments / votes from the last 30 years"),
+    ("policy-wonk", "a policy wonk who reads the resolution criteria word-for-word and finds the loophole"),
+]
+_PERSONAS_FINANCE = [
+    ("momentum", "a momentum trader who follows price action and treats trends as informative until proven broken"),
+    ("vol-trader", "a volatility trader who reads the spread + depth as the truer probability than mid-price"),
+    ("macro", "a macro analyst who connects this market to broader rates / FX / commodity regime"),
+]
+_PERSONAS_CRYPTO = [
+    ("on-chain", "an on-chain analyst who weights wallet flows, exchange reserves, and protocol metrics over headlines"),
+    ("narrative", "a narrative trader who tracks what's loud on Crypto Twitter and sizes against consensus"),
+]
+_PERSONAS_NEWS = [
+    ("news-driven", "a news-driven trader who weights recency heavily and treats stale resolution criteria as a tell"),
 ]
 
 
-def _persona(agent_index: int) -> str:
-    return _PERSONAS[agent_index % len(_PERSONAS)]
+_POLITICS_KW = ("election", "president", "senate", "congress", "trump", "biden", "harris", "vance",
+                "putin", "ukraine", "war", "ceasefire", "treaty", "vote", "poll", "primary", "supreme court",
+                "nominee", "appointment", "impeachment", "geopolitic", "diplomatic")
+_FINANCE_KW = ("fed", "rate", "interest", "cpi", "inflation", "gdp", "earnings", "ipo", "stock", "spx",
+               "nasdaq", "treasury", "bond", "yield", "spread", "fx", "dollar", "euro", "yen", "recession")
+_CRYPTO_KW = ("bitcoin", "btc", "ethereum", "eth", "solana", "sol", "crypto", "etf", "halving", "merge",
+              "stablecoin", "usdc", "usdt", "defi", "memecoin", "doge", "pepe", "shib", "polymarket")
+
+
+def _detect_market_category(seed_doc: str) -> str:
+    """Cheap keyword classifier. Returns 'politics' | 'finance' | 'crypto' | 'general'."""
+    text = seed_doc.lower()[:1500]  # cap — first 1.5k chars carries the question + summary
+    pol = sum(1 for kw in _POLITICS_KW if kw in text)
+    fin = sum(1 for kw in _FINANCE_KW if kw in text)
+    crp = sum(1 for kw in _CRYPTO_KW if kw in text)
+    best = max(pol, fin, crp)
+    if best == 0:
+        return "general"
+    if pol == best:
+        return "politics"
+    if crp == best:
+        return "crypto"
+    return "finance"
+
+
+def _persona_pool(category: str) -> list[tuple[str, str]]:
+    """Return the persona pool for a market category. Always anchors on
+    _PERSONAS_CORE so every swarm has the base lenses, then layers on the
+    category-specific personas to get specialist depth."""
+    pool = list(_PERSONAS_CORE) + list(_PERSONAS_NEWS)
+    if category == "politics":
+        pool += _PERSONAS_POLITICS
+    elif category == "finance":
+        pool += _PERSONAS_FINANCE
+    elif category == "crypto":
+        pool += _PERSONAS_CRYPTO
+    return pool
+
+
+def _persona_for(agent_index: int, seed_doc: str) -> tuple[str, str]:
+    """Pick a (label, lens) tuple for this agent based on market category.
+    Round-robin across the category pool so each agent gets a distinct lens
+    until the pool wraps."""
+    pool = _persona_pool(_detect_market_category(seed_doc))
+    return pool[agent_index % len(pool)]
+
+
+# ── LLM call ──────────────────────────────────────────────────────────────
+# The user prompt embeds the (now-rich) seed_doc + peer beliefs + a strict
+# JSON schema. The system prompt is the Tetlock-style superforecaster
+# methodology, adapted from polymarket/agents prompts.py:112-144 (which is
+# itself drawn from Phil Tetlock's _Superforecasting_ work). We additionally
+# tell agents how to interpret the Polymarket-specific signals that seed.py
+# now bakes in (entropy tier, spread, correlations, cryo) — the agent
+# framework had none of this Polymarket awareness.
+
+_SUPERFORECASTER_SYS = """You are one of many independent forecasters in a prediction-market swarm. Hold your own view; update on peer beliefs ONLY when their reasoning outweighs yours. Diversity beats agreement.
+
+For each market, follow this Tetlock-style methodology silently before producing your answer:
+
+1. Decompose: break the question into 2-3 sub-questions whose joint probability gives the answer.
+2. Base-rate: anchor on the historical frequency of similar events. Reference class > intuition.
+3. Inside view: list 2-3 case-specific factors that move probability up or down. Quantify each.
+4. Update on signals: read the order-book microstructure section in the seed_doc.
+   - Spread > 100 bps OR entropy tier 2 (deep freeze) → discount your edge by ≥50%; the price is probably stale or whale-parked, not consensus.
+   - Tier 1 (frozen) → soft penalty (−0.1 confidence). Tier 0 (active) → no adjustment.
+   - Cryo anomaly (sudden freeze) → either someone knows something (small size, fast exit) or manipulation (pass). Either way, lower confidence.
+   - Correlated markets section → if you see correlated markets you don't already hold, your trade is uncrowded; if the fund holds correlated positions, treat as duplicate-bet (lower confidence).
+5. Probabilistic output: express probabilities, never certainties. Calibration matters more than directional accuracy."""
+
+_USER_PROMPT_TEMPLATE = """Your lens: **{persona_lens}**
+
+{seed_doc}
+{peer_summary}
+Return ONLY a JSON object with these exact keys:
+- probabilities: object with one key per outcome ({outcomes}) mapping to 0..1 (must sum to ~1.0)
+- confidence: number 0..1 — your confidence in YOUR estimate (NOT the swarm consensus). Apply the signal-driven penalties from the system prompt explicitly.
+- reasoning: one short paragraph (≤80 words) covering: (a) your decomposition + base-rate, (b) how the order-book signals shifted your estimate, (c) your distinct angle vs the swarm. NOT a summary of peer beliefs."""
 
 
 def _llm_forecast(
     *,
     seed_doc: str,
     outcomes: list[str],
-    persona: str,
+    persona_lens: str,
     peer_beliefs: list[Belief],
     api_key: str,
     base_url: str,
@@ -106,23 +203,13 @@ def _llm_forecast(
             lines.append(f"- {b.agent_id} (conf={b.confidence:.2f}): {probs}")
         peer_summary = "\n## Peer beliefs you have observed\n" + "\n".join(lines) + "\n"
 
-    user_prompt = (
-        f"You are **{persona}** participating in a swarm of independent forecasters.\n"
-        f"{seed_doc}\n"
-        f"{peer_summary}\n"
-        "Return ONLY a JSON object with these exact keys:\n"
-        f"- probabilities: object with one key per outcome ({outcomes}) "
-        "mapping to a probability 0..1 (must sum to ~1.0)\n"
-        "- confidence: number 0..1 (how confident in YOUR estimate, "
-        "not the swarm consensus)\n"
-        "- reasoning: one short paragraph (≤ 60 words) — your distinct angle, "
-        "NOT a summary of peers"
+    user_prompt = _USER_PROMPT_TEMPLATE.format(
+        persona_lens=persona_lens,
+        seed_doc=seed_doc,
+        peer_summary=peer_summary,
+        outcomes=outcomes,
     )
-    sys_prompt = (
-        "You are one of many independent prediction-market forecasters. "
-        "Hold your own view. Update on peer beliefs only when their reasoning "
-        "outweighs yours; otherwise stay anchored. Diversity beats agreement."
-    )
+    sys_prompt = _SUPERFORECASTER_SYS
 
     client = OpenAI(api_key=api_key, base_url=base_url)
     resp = client.chat.completions.create(
@@ -174,7 +261,12 @@ def run_agent(
 
     axl = AxlClient(api_url=spec.api_url, known_peers=spec.peer_pubkeys or [])
     inbox = _inbox_for(spec.api_url, spec.peer_pubkeys or [])
-    persona = _persona(spec.node_index * 7 + int(spec.agent_id.rsplit("-", 1)[-1]))
+    # Pick a persona aware of the market's category (politics / finance /
+    # crypto / general) so specialist lenses get used where relevant.
+    persona_label, persona_lens = _persona_for(
+        agent_index=spec.node_index * 7 + int(spec.agent_id.rsplit("-", 1)[-1]),
+        seed_doc=seed_doc,
+    )
     last_belief: Belief | None = None
 
     for r in range(1, rounds + 1):
@@ -191,7 +283,7 @@ def run_agent(
         probs, conf, reasoning = _llm_forecast(
             seed_doc=seed_doc,
             outcomes=outcomes,
-            persona=persona,
+            persona_lens=persona_lens,
             peer_beliefs=market_peers,
             api_key=llm_api_key,
             base_url=llm_base_url,
@@ -212,8 +304,8 @@ def run_agent(
             timestamp=time.time(),
         )
         log.info(
-            "%s round=%d probs=%s conf=%.2f peers_seen=%d",
-            spec.agent_id, r,
+            "%s [%s] round=%d probs=%s conf=%.2f peers_seen=%d",
+            spec.agent_id, persona_label, r,
             {k: round(v, 3) for k, v in probs.items()},
             conf, len(market_peers),
         )
