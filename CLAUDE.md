@@ -17,7 +17,9 @@ Build phases (see `.context/meridian/BUILD_PLAN.md`):
 | 5 — autonomous loop + terminal | done | `services/orchestrator/` (CLI daemon) + unified Next.js operator terminal |
 | 5b — Circle Gateway crosschain settlement | done | `services/cogito/src/bridge.ts` (+ `gatewayChains.ts`) + `services/execution_router/bridge_client.py` |
 | 5c — cogito `/fhe/encrypt` (real `InEuint128`) | done | `services/cogito/src/fhe.ts` (cofhejs wrapper); Python `CogitoEncryptor` posts here |
-| 6 — submission polish | next | |
+| 6a — swarm intelligence overhaul | done | `services/swarm_runner/agent.py` (Tetlock superforecaster + category-aware personas) + `services/meridian_signal/seed.py` (rich seed_doc) + `orchestrator.py` (disagreement-aware aggregation + minority report) |
+| 6b — Pinata-hosted operator (closes OpenClaw gap) | done | `apps/app/scripts/pinata-agent-overlay/` + `services/execution_router/api.py` (DEMO_REQUIRE_REAL gate + bearer auth) + `apps/app/app/api/pinata/*` |
+| 6c — submission polish (final) | next | docs, demo video, scoring rubric notes |
 
 ## Chain topology
 
@@ -54,7 +56,61 @@ over localhost via `POST /bridge` and `POST /bridge/deposit`.
 
 - Graceful degradation > hard failure during hackathon. cogito unreachable → `*_hash_0g: null`. AXL mesh down → fall back to `SWARM_BACKEND=lite`.
 - All sidecar wallets are testnet-only and `.env`-gitignored.
-- Don't expose any sidecar publicly — they're symmetric-bearer-auth between localhost processes.
+- Don't expose any sidecar publicly — they're symmetric-bearer-auth between localhost processes. EXCEPTION: when the Pinata agent is wired (see Phase 6b), execution-router + signal-gateway are exposed via Cloudflare Tunnel + protected by `MIROSHARK_AGENT_TOKEN` (env-gated, additive — local dev unchanged when unset). Cogito stays loopback-only with its own `COGITO_TOKEN`.
+
+## Swarm intelligence (Phase 6a)
+
+Each agent in the AXL swarm runs the **Tetlock superforecaster methodology** silently
+before forecasting (decompose → base-rate → inside view → update on signals →
+probabilistic). The system prompt is `_SUPERFORECASTER_SYS` in `agent.py:152`.
+
+Per-market context fed to every agent (`seed.py:build_seed_document`):
+
+- **Order-book microstructure** (E-01 entropy): per-outcome spread, depth, tier (0=active, 1=frozen, 2=deep-freeze), H bits. Trader's note baked in: tier 2 → discount edge ≥50%, spread > 100bps → slippage warning.
+- **Correlated markets** (T-03 topology): list of markets with `|Pearson r| ≥ 0.70` over rolling mid-prices. Trader's note: duplicate-bet risk if fund holds correlated positions.
+- **Cryo anomaly flag** (C-02): when this market's entropy z-score < -1.5 (abnormally frozen), flagged with "small size + fast exit" trader's note.
+
+**Persona pool is category-aware.** `_detect_market_category` runs cheap keyword
+classification (politics / finance / crypto / general) on the seed_doc; agents are
+spread across a category-appropriate pool (e.g. politics markets get
+`geopolitical-analyst`, `political-historian`, `policy-wonk` lenses; crypto markets
+get `on-chain` + `narrative` lenses).
+
+**Aggregation is disagreement-aware.** `_aggregate_beliefs` returns
+`(consensus, adjusted_conf, raw_conf)` — `adjusted_conf` is `raw_conf *
+max(0.5, 1 - 0.5 * normalised_disagreement)` when mean pairwise L1 distance
+between agent probability vectors exceeds 0.30. `_summarise_reasoning` also
+returns a `minority_report` for the strongest confident dissenter when the
+swarm splits. Both ship in `/api/signal/run` as `confidence`,
+`raw_confidence`, `agreement_score`, `minority_report`.
+
+## Pinata-hosted operator (Phase 6b)
+
+The "OpenClaw gap" (24/7 autonomous operator) is closed by deploying the
+`polymarket/agents` derivative template `MoonPay Prediction Market Trader` on
+Pinata Cloud and routing its execution calls back into MiroShark's privacy
+rail.
+
+- **Live agent:** `xt1sgi73.agents.pinata.cloud` paired with Telegram bot
+  `@miro_shark_bot`. Same backend, two surfaces.
+- **Custom workspace overlay:** `apps/app/scripts/pinata-agent-overlay/`
+  contains the canonical edits we apply to the upstream template. `MIROSHARK.md`
+  briefs the agent on the privacy rail; `skills/miroshark.md` is the endpoint
+  cookbook with curl examples + the Phase 6 swarm response shape; `SOUL.md` /
+  `TOOLS.md` mark `mp prediction-market position buy/sell/redeem` as
+  DEPRECATED in favour of `POST $MIROSHARK_EXECUTION_URL/api/execution/open`.
+- **Reach-back:** agent calls MiroShark via Cloudflare Tunnel (`miro-shark.com`
+  zone, three subdomains: `execution.`, `signal.`, `cogito.`). Bearer-auth via
+  `MIROSHARK_AGENT_TOKEN` shared between the operator's `.env` and Pinata
+  agent secrets.
+- **Redeploy:** when the trial expires or you fork to a new template, run
+  `apps/app/scripts/redeploy-pinata-agent.sh <AGENT_ID> <GIT_TOKEN>` — clones
+  fresh agent, overlays our 7 source files, pushes. Idempotent.
+- **Demo gate:** `DEMO_REQUIRE_REAL=1` in `.env` forces `/open` and `/resolve`
+  to return 503 with structured `blockers` if any sponsor leg would silently
+  degrade to dry-run (e.g. CLOB credentials missing, bridge unreachable, FHE
+  encryptor not configured). The agent never falls back to `mp position buy`
+  on 503 — that's exactly the masquerade the flag prevents.
 
 ## Tech debt
 
