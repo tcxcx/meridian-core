@@ -1618,7 +1618,18 @@ export default function OperatorTerminal() {
                 <button
                   key={row.market_id}
                   className={`opportunity-card ${row.market_id === selectedMarketId ? 'active' : ''} ${streamLoading && row.market_id !== selectedMarketId ? 'is-locked' : ''}`}
-                  onClick={() => setSelectedMarketId(row.market_id)}
+                  onClick={() => {
+                    setSelectedMarketId(row.market_id)
+                    // Auto-fire the swarm on first click of a market that
+                    // has no cached signal yet. Operators previously had to
+                    // click the card and then click Run Swarm — collapsed
+                    // into one gesture so the verdict + swarm-quality panel
+                    // populate while the operator is still reading the
+                    // market question.
+                    if (!signalCache[row.market_id] && !signalLoading && !streamLoading) {
+                      runSignalForMarket(row.market_id, { quiet: true })
+                    }
+                  }}
                   disabled={streamLoading && row.market_id !== selectedMarketId}
                   title={streamLoading && row.market_id !== selectedMarketId ? 'Streaming another market — wait for the swarm to finish' : undefined}
                 >
