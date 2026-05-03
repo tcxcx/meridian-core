@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic'
 
 async function handle(request, { params }) {
   const { path = [] } = await params
-  return proxyRequest({ request, service: 'signal', pathSegments: ['api', ...path] })
+  return proxyRequest({ request, service: 'execution', pathSegments: path })
 }
 
 export const GET = handle
