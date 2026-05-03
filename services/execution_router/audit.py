@@ -76,14 +76,26 @@ class AuditLog:
         payload: dict[str, Any] | None = None,
     ) -> int:
         ts = time.time()
-        body = json.dumps(_redact(payload or {}), default=str)
+        redacted = _redact(payload or {})
+        body = json.dumps(redacted, default=str)
         with self._lock, self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO audit_events (ts, position_id, event, status, payload) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (ts, position_id, event, status, body),
             )
-            return int(cur.lastrowid or 0)
+            row_id = int(cur.lastrowid or 0)
+        # Mirror to Neon. Best-effort — operator-terminal reads from DB on
+        # boot, SSE/SQLite remain canonical for live in-flight updates.
+        try:
+            from services._shared import db as _db
+            _db.write_audit(
+                event=event, position_id=position_id, status=status,
+                payload=redacted, ts=ts,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return row_id
 
     def recent(
         self,

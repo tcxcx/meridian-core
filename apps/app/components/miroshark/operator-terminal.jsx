@@ -3,10 +3,13 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 
+import AddFundDialog from '@/components/miroshark/add-fund-dialog'
+import AgentPanel from '@/components/miroshark/agent-panel'
+import EnsName from '@/components/miroshark/ens-name'
 import GraphPanel from '@/components/miroshark/graph-panel'
-import PortfolioPerformance from '@/components/miroshark/portfolio-performance'
+import PnlBento from '@/components/miroshark/pnl-bento'
 import WalletActionModals from '@/components/miroshark/wallet-action-modals'
-import WalletGatewayDropdown from '@/components/miroshark/wallet-gateway-dropdown'
+import WalletPopover, { WalletAction, WalletActionRow, WalletDivider, WalletRow } from '@/components/miroshark/wallet-popover'
 import { buildOpportunityGraph, scoreOpportunity } from '@/lib/opportunity-graph'
 
 const SIGNAL_BASE = '/signal'
@@ -113,6 +116,18 @@ function formatElapsed(seconds) {
   if (s < 60) return `${s}s`
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
 }
+
+// Settled positions surface as ✓ rows in the Positions list — the standalone
+// hero card was cut in the lean redesign. Tx hashes for settled rows render
+// inline via explorerUrlFor() helpers further down.
+function explorerUrlFor(hash) {
+  if (!hash || typeof hash !== 'string' || !hash.startsWith('0x')) return null
+  // Heuristic: settle tx is on Arb Sepolia, gateway/clob is on Polygon Amoy.
+  // We can't tell from hash alone — default to Arb Sepolia explorer; users
+  // who care about chain attribution open the position card.
+  return `https://sepolia.arbiscan.io/tx/${hash}`
+}
+
 
 // ── Swarm-quality sub-card ────────────────────────────────────────────────
 // Reads agreement_score, raw_confidence vs confidence, dissent_summary,
@@ -346,6 +361,10 @@ export default function OperatorTerminal() {
   const [streamStatus, setStreamStatus] = useState('idle')
   const [showHistory, setShowHistory] = useState(false)
   const [activeCapitalModal, setActiveCapitalModal] = useState('')
+  const [pendingTransfers, setPendingTransfers] = useState([])
+  const [fundAgentTransferId, setFundAgentTransferId] = useState('')
+  const [funds, setFunds] = useState([])
+  const [addFundOpen, setAddFundOpen] = useState(false)
 
   const positionsEventSourceRef = useRef(null)
   const positionsRetryTimerRef = useRef(null)
@@ -369,8 +388,18 @@ export default function OperatorTerminal() {
   )
   const tenantOptions = useMemo(() => {
     const ids = (tenants || []).map((item) => item.tenant_id).filter(Boolean)
-    return [...new Set(['default', ...ids])]
-  }, [tenants])
+    const fundIds = (funds || []).map((item) => item.tenant_id).filter(Boolean)
+    return [...new Set(['default', ...ids, ...fundIds])]
+  }, [tenants, funds])
+  // Map tenant_id → fund row (when the tenant came from /api/funds). Used to
+  // surface the display_name + ens_name in the Agent popover instead of the
+  // raw slug.
+  const fundsByTenant = useMemo(() => {
+    const map = {}
+    for (const f of funds || []) map[f.tenant_id] = f
+    return map
+  }, [funds])
+  const selectedFund = fundsByTenant[selectedTenant] || null
   const visiblePositions = useMemo(
     () => positions.filter((item) => (item.tenant_id || 'default') === selectedTenant),
     [positions, selectedTenant],
@@ -565,18 +594,23 @@ export default function OperatorTerminal() {
 
   const fetchAudit = async (positionId, { silent = false } = {}) => {
     if (!positionId) return
+    // DB-first; fall back to Python /execution/audit on any failure.
+    let events = null
     try {
-      const payload = await readJson(`${EXECUTION_BASE}/api/execution/audit/${positionId}`)
-      setAuditByPosition((current) => ({ ...current, [positionId]: payload.events || [] }))
-      if (selectedPositionId === positionId) {
-        setAuditEvents(payload.events || [])
+      const payload = await readJson(`/api/db/positions/${encodeURIComponent(positionId)}/audit`)
+      events = payload.events || []
+    } catch (_dbError) {
+      try {
+        const payload = await readJson(`${EXECUTION_BASE}/api/execution/audit/${positionId}`)
+        events = payload.events || []
+      } catch (error) {
+        if (selectedPositionId === positionId) setAuditEvents([])
+        if (!silent) addAlert(`audit fetch failed: ${error.message}`, 'warn')
+        return
       }
-    } catch (error) {
-      if (selectedPositionId === positionId) {
-        setAuditEvents([])
-      }
-      if (!silent) addAlert(`audit fetch failed: ${error.message}`, 'warn')
     }
+    setAuditByPosition((current) => ({ ...current, [positionId]: events }))
+    if (selectedPositionId === positionId) setAuditEvents(events)
   }
 
   const refreshHealth = async () => {
@@ -677,22 +711,45 @@ export default function OperatorTerminal() {
     }
   }
 
-  const fetchPositions = async () => {
+  // User-created funds (each = a tenant + ENS subname). The Agent popover
+  // tenant switcher merges this list with the static tenant registry above so
+  // the user sees all available funds + can switch + add new ones inline.
+  const fetchFunds = async ({ silent = true } = {}) => {
     try {
-      const payload = await readJson(`${EXECUTION_BASE}/api/execution/positions`)
-      const nextPositions = payload.positions || []
-      setPositions(nextPositions)
-      if (!selectedPositionId && nextPositions.length) {
-        setSelectedPositionId(nextPositions[0].position_id)
-      }
-      nextPositions.forEach((position) => {
-        if (!auditByPosition[position.position_id]) {
-          fetchAudit(position.position_id, { silent: true })
-        }
-      })
+      const payload = await readJson('/api/funds')
+      setFunds(payload.funds || [])
     } catch (error) {
-      addAlert(`positions fetch failed: ${error.message}`, 'warn')
+      if (!silent) addAlert(`funds list failed: ${error.message}`, 'warn')
     }
+  }
+
+  const fetchPositions = async () => {
+    // Read from the Neon projection first — fast (no Python round-trip),
+    // survives router restarts, renders persisted state on page refresh.
+    // Falls back to /execution if the DB read fails (no DATABASE_URL,
+    // tables not yet bootstrapped, etc.). SSE keeps live in-flight updates.
+    let nextPositions = []
+    try {
+      const payload = await readJson(`/api/db/positions?tenant_id=${encodeURIComponent(selectedTenant)}`)
+      nextPositions = payload.positions || []
+    } catch (_dbError) {
+      try {
+        const payload = await readJson(`${EXECUTION_BASE}/api/execution/positions`)
+        nextPositions = payload.positions || []
+      } catch (error) {
+        addAlert(`positions fetch failed: ${error.message}`, 'warn')
+        return
+      }
+    }
+    setPositions(nextPositions)
+    if (!selectedPositionId && nextPositions.length) {
+      setSelectedPositionId(nextPositions[0].position_id)
+    }
+    nextPositions.forEach((position) => {
+      if (!auditByPosition[position.position_id]) {
+        fetchAudit(position.position_id, { silent: true })
+      }
+    })
   }
 
   const fetchCryo = async () => {
@@ -1024,6 +1081,7 @@ export default function OperatorTerminal() {
     await refreshHealth()
     await fetchTerminalTicker({ silent: true })
     await loadTenants()
+    await fetchFunds({ silent: true })
     await fetchPositions()
 
     const universe = await scanMarkets()
@@ -1130,607 +1188,281 @@ export default function OperatorTerminal() {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   }
 
+  // Recent audit events across all positions, newest first — feeds the AGENT
+  // panel's `last` strip. Two events is the right density for a glance.
+  const recentAuditEvents = useMemo(() => {
+    const all = []
+    for (const [pid, events] of Object.entries(auditByPosition || {})) {
+      for (const ev of events || []) {
+        all.push({ ...ev, payload: { ...(ev.payload || {}), position_id: pid } })
+      }
+    }
+    return all.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0)).slice(0, 4)
+  }, [auditByPosition])
+
+  // Pending Fund-Agent transfers needing this signer's signature → header pill.
+  // Polls every 5s. Reads from the Neon projection (DB-first), falls back to
+  // the Python /execution endpoint if the DB isn't reachable.
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/db/treasury/transfers/pending`)
+        const json = await res.json()
+        if (!cancelled && res.ok) {
+          setPendingTransfers(json.transfers || [])
+          return
+        }
+      } catch (_dbErr) { /* fall through */ }
+      try {
+        const res = await fetch(`${EXECUTION_BASE}/api/execution/treasury/transfers/pending`)
+        const json = await res.json()
+        if (!cancelled && res.ok) setPendingTransfers(json.transfers || [])
+      } catch (_e) { /* swallow */ }
+    }
+    poll()
+    const id = window.setInterval(poll, 5000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [])
+
+  // Lean header values — derived once, reused below.
+  const treasuryBalanceDisplay = formatUsd(treasuryPlane?.gateway_balance_usdc || gatewayAvailableBalance || 0)
+  const agentBalanceDisplay = formatUsd(tradingPlane?.available_to_deploy_usdc || 0)
+  const activeStreamingPosition = activeVisiblePositions[0] || null
+  const activeStreamElapsed = activeStreamingPosition?.created_at
+    ? nowSecs - Math.floor(activeStreamingPosition.created_at)
+    : null
+
   return (
-    <div className="terminal-shell">
-      <header className="terminal-header">
-        <div className="brand-block">
-          <div className="brand-mark">MIROSHARK</div>
-          <div className="brand-sub">prediction-market hedge fund</div>
+    <div className="terminal-shell lean-shell">
+
+      {/* HEADER BAND */}
+      <header className="lean-header">
+        <div className="lean-brand">
+          <span className="lean-brand-mark">MIROSHARK</span>
+          <a className="lean-brand-dispatch" href="https://t.me/miro_shark_bot" target="_blank" rel="noreferrer" title="Telegram dispatch">↗ dispatch</a>
         </div>
-        <div className="status-strip">
-          <WalletGatewayDropdown
-            gatewayBalance={gatewayBalanceView}
-            capitalPlane={capitalPlane}
-            onOpenModal={setActiveCapitalModal}
-          />
-          <span className="status-pill">{operatorModeLabel}</span>
-          <span className="status-pill">{chainLabel}</span>
-          <span className={`status-pill ${signalOnline ? '' : 'warn'}`}>signal {signalOnline ? 'online' : 'offline'}</span>
-          <span className={`status-pill ${executionOnline ? '' : 'warn'}`}>router {executionOnline ? 'online' : 'offline'}</span>
-          <span className={`status-pill ${zgPillTone}`} title={zgPillTitle}>{zgPillLabel}</span>
-          <span className={`status-pill ${pinataPillTone}`} title={pinataConnector?.agentChatUrl || ''}>{pinataPillLabel}</span>
-          {pinataConnector?.telegramHandle ? (
-            <a
-              className="status-pill status-pill-link"
-              href={pinataConnector.telegramUrl || `https://t.me/${pinataConnector.telegramHandle.replace(/^@/, '')}`}
-              target="_blank"
-              rel="noreferrer"
-              title="Open paired Telegram bot"
-            >tg {pinataConnector.telegramHandle}</a>
-          ) : null}
-          {openclawEnabled ? (
-            <span className="status-pill" title="Legacy OpenClaw connector still active">openclaw legacy</span>
-          ) : null}
+
+        <div className="lean-health">
+          <span className={`lean-health-dot ${signalOnline ? 'is-ok' : 'is-warn'}`} title={`signal ${signalOnline ? 'online' : 'offline'}`} />
+          <span className={`lean-health-dot ${executionOnline ? 'is-ok' : 'is-warn'}`} title={`router ${executionOnline ? 'online' : 'offline'}`} />
+          <span className={`lean-health-dot ${zgOnline && !zgLow ? 'is-ok' : 'is-warn'}`} title={zgPillTitle} />
         </div>
+
+        <WalletPopover label="Treasury" balance={treasuryBalanceDisplay}>
+          <WalletRow label="Reserve target" value={formatUsd(treasuryPlane?.reserve_target_usdc || 0)} />
+          <WalletRow label="Reserve current" value={formatUsd(treasuryPlane?.gateway_balance_usdc || 0)} />
+          <WalletRow label="Signers" value={`passkey ${treasuryPlane?.passkey_ready ? '●' : '○'}  multisig ${treasuryPlane?.multisig_ready ? '●' : '○'}`} />
+          <WalletRow label="Funding mode" value={treasuryPlane?.funding_mode || '—'} />
+          <WalletRow label="Address" value={treasuryPlane?.address ? <EnsName address={treasuryPlane.address} /> : '—'} mono />
+          <WalletDivider label="actions" />
+          <WalletActionRow>
+            <WalletAction label="Deposit" hint="incoming wire / bridge" glyph="↗" onClick={() => setActiveCapitalModal('deposit')} />
+            <WalletAction label="Withdraw" hint="vault → external" onClick={() => setActiveCapitalModal('send')} />
+            <WalletAction label="Fund Agent" hint="vault → trading wallet · multisig" onClick={() => { setFundAgentTransferId(''); setActiveCapitalModal('fund-agent') }} />
+          </WalletActionRow>
+        </WalletPopover>
+
+        <WalletPopover label="Agent" balance={agentBalanceDisplay} accent>
+          <WalletRow label="Deployable" value={formatUsd(tradingPlane?.available_to_deploy_usdc || 0)} />
+          <WalletRow label="Replenish needed" value={tradingPlane?.replenish_needed ? 'yes' : 'no'} tone={tradingPlane?.replenish_needed ? 'warn' : ''} />
+          <div className="wallet-pop-row">
+            <span className="wallet-pop-row-label">Fund</span>
+            <span className="wallet-pop-row-value wallet-pop-fund-cell">
+              <select
+                className="wallet-pop-select"
+                value={selectedTenant}
+                onChange={(e) => setSelectedTenant(e.target.value)}
+              >
+                {tenantOptions.map((t) => {
+                  const fund = fundsByTenant[t]
+                  const label = fund ? fund.display_name : t.toUpperCase()
+                  return <option key={t} value={t}>{label}</option>
+                })}
+              </select>
+              <button
+                type="button"
+                className="wallet-pop-add-fund"
+                onClick={() => setAddFundOpen(true)}
+                title="Provision a new fund (trading wallet + ENS subname)"
+              >+ Add fund</button>
+            </span>
+          </div>
+          {selectedFund?.ens_name ? (
+            <WalletRow label="ENS" value={<EnsName name={selectedFund.ens_name} address={selectedFund.trading_address} />} mono />
+          ) : null}
+          <WalletRow label="Venue" value={tradingPlane?.venue || 'Polymarket'} />
+          <WalletRow label="Address" value={tradingPlane?.address ? <EnsName address={tradingPlane.address} /> : '—'} mono />
+          <div className="wallet-pop-row">
+            <span className="wallet-pop-row-label">Autonomous</span>
+            <span className="wallet-pop-row-value wallet-pop-autonomous-cell">
+              {pinataConnected ? (
+                <>
+                  <span className={`wallet-pop-autonomous-pulse s-${pinataRunState}`} aria-hidden="true" />
+                  <span>{pinataRunState}</span>
+                  <button
+                    type="button"
+                    className="wallet-pop-autonomous-btn"
+                    disabled={pinataLoading}
+                    onClick={() => setPinataRunState(pinataAutonomousNext)}
+                  >{pinataRunState === 'running' ? 'Pause' : 'Run'}</button>
+                </>
+              ) : 'not connected'}
+            </span>
+          </div>
+          <WalletDivider label="actions" />
+          <WalletActionRow>
+            <WalletAction label="Bridge" hint="Arb ↔ Polygon" glyph="↗" onClick={() => setActiveCapitalModal('bridge')} />
+            <WalletAction label="Swap" hint="USDC venues" glyph="↗" onClick={() => setActiveCapitalModal('swap')} />
+            <WalletAction label="Request from Treasury" hint="open Fund Agent dialog · multisig" onClick={() => { setFundAgentTransferId(''); setActiveCapitalModal('fund-agent') }} />
+            {pinataConnector?.onrampChatUrl ? (
+              <WalletAction label="Fund via MoonPay" hint="card → wallet" glyph="↗" onClick={() => openChatPanel(pinataConnector.onrampChatUrl, 'MoonPay Onramp')} />
+            ) : null}
+            {pinataConnector?.agentChatUrl ? (
+              <WalletAction label="Chat with agent" hint="open DM" glyph="↗" onClick={() => openChatPanel(pinataConnector.agentChatUrl, 'Trader Agent')} />
+            ) : null}
+          </WalletActionRow>
+        </WalletPopover>
+
+        {pendingTransfers.length > 0 ? (
+          <button
+            type="button"
+            className="lean-pending-pill"
+            onClick={() => { setFundAgentTransferId(pendingTransfers[0].transfer_id); setActiveCapitalModal('fund-agent') }}
+            title={`${pendingTransfers.length} transfer${pendingTransfers.length > 1 ? 's' : ''} awaiting your signature`}
+          >
+            pending sig {pendingTransfers.length}
+          </button>
+        ) : null}
+
+        {activeStreamingPosition ? (
+          <button
+            type="button"
+            className="lean-active-pos"
+            onClick={() => setSelectedPositionId(activeStreamingPosition.position_id)}
+            title="Jump to active position"
+          >
+            pos {shorten(activeStreamingPosition.position_id, 10)} ▸ {formatElapsed(activeStreamElapsed || 0)}
+          </button>
+        ) : null}
       </header>
 
-      <div className="ticker-stack">
-        <div className="ticker-bar">
-          <div className="ticker-tag">NEWSWIRE</div>
-          <div className="ticker-viewport">
-            <div className="ticker-track newswire-track">
-              {duplicatedHeadlineItems.map((item) => (
-                item.url ? (
-                  <a
-                    key={item._tickerKey}
-                    className="ticker-item headline-item headline-link"
-                    href={item.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <span className="ticker-source">{item.source || 'Desk'}</span>
-                    <span>{item.anchor}</span>
-                    {item.published_label ? <span className="ticker-meta">{item.published_label}</span> : null}
-                  </a>
-                ) : (
-                  <span key={item._tickerKey} className="ticker-item headline-item">
-                    <span className="ticker-source">{item.source || 'Desk'}</span>
-                    <span>{item.anchor}</span>
-                    {item.published_label ? <span className="ticker-meta">{item.published_label}</span> : null}
-                  </span>
-                )
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="ticker-bar">
-          <div className="ticker-tag alt">MARKET TAPE</div>
-          <div className="ticker-viewport">
-            <div className="ticker-track market-track">
-              {duplicatedTapeItems.map((item) => (
-                <span key={item._tickerKey} className={`ticker-item ${tickerToneClass(item)}`}>
-                  {item.kind === 'price' ? (
-                    <>
-                      <span className="ticker-source">{item.symbol}</span>
-                      <span>{formatTickerPrice(item.price)}</span>
-                      {item.change_pct != null ? <span className="ticker-change">{formatSignedPercent(item.change_pct)}</span> : null}
-                      <span className="ticker-meta">{item.label}</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="ticker-source">OPS</span>
-                      <span>{item.label}</span>
-                    </>
-                  )}
-                </span>
-              ))}
-            </div>
-          </div>
+      {/* NEWSWIRE BAND */}
+      <div className="lean-news">
+        <div className="lean-news-track">
+          {duplicatedHeadlineItems.map((item) => (
+            item.url ? (
+              <a key={item._tickerKey} className="lean-news-item" href={item.url} target="_blank" rel="noreferrer">
+                <span className="lean-news-source">{item.source || 'Desk'}</span>
+                <span>{item.anchor}</span>
+              </a>
+            ) : (
+              <span key={item._tickerKey} className="lean-news-item">
+                <span className="lean-news-source">{item.source || 'Desk'}</span>
+                <span>{item.anchor}</span>
+              </span>
+            )
+          ))}
         </div>
       </div>
 
       {onboardingMode ? (
-        <div className="terminal-banner" style={{ margin: '0 0 16px', border: '2px solid #2a5fff', background: '#0b1730', color: '#f5f8ff', padding: '14px 18px', boxShadow: '10px 10px 0 #12338f' }}>
-          Onboarding active. Finish wallets, then return to <a href="/setup" style={{ color: '#8db1ff' }}>setup</a>.
+        <div className="lean-onboarding-banner">
+          Onboarding active. Finish wallets, then return to <a href="/setup">setup</a>.
         </div>
       ) : null}
 
-      <main className="terminal-grid">
-        <aside className="terminal-rail">
-          <section className="rail-card accent-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">LOOP</span>
-                <span className="card-eyebrow">Operator</span>
-              </div>
-              <span className="card-head-r">24/7</span>
-            </div>
-            <div className="card-title">Live Loop</div>
-            <dl className="metric-list">
-              <div className="metric-row"><dt>Mode</dt><dd>{operatorStatus.mode || 'manual'}</dd></div>
-              <div className="metric-row"><dt>Ready now</dt><dd>{actionableMarkets.length}</dd></div>
-              <div className="metric-row"><dt>Loop cadence</dt><dd>{operatorStatus.interval_s ? `${operatorStatus.interval_s}s` : 'n/a'}</dd></div>
-              <div className="metric-row"><dt>Strategies</dt><dd>{(operatorStatus.strategies || []).join(', ') || 'directional'}</dd></div>
-              <div className="metric-row"><dt>Coverage</dt><dd>{signalCoverage}</dd></div>
-              <div className="metric-row"><dt>Unified USDC</dt><dd>{formatUsd(capitalBalances.grand_total || operatorStatus.capital?.total_capital || 0)}</dd></div>
-              <div className="metric-row"><dt>Per position</dt><dd>{formatUsd(capitalPolicy.per_position_max_usdc || operatorStatus.capital?.per_position_max || 0)}</dd></div>
-              <div className="metric-row"><dt>Threshold</dt><dd>{readinessThresholdLabel}</dd></div>
-            </dl>
-            <div className="capital-subsection">
-              <div className="capital-subhead">Autonomous mode (Pinata Agent)</div>
-              {pinataConnected ? (
-                <>
-                  <div className="autonomous-row">
-                    <span className={`autonomous-state s-${pinataRunState}`}>{pinataRunState}</span>
-                    <span className="autonomous-meta">
-                      {pinataConnector?.agentTemplate || 'agent'} · {shorten(pinataConnector?.agentId || '—', 10)}
-                    </span>
-                  </div>
-                  <div className="autonomous-actions">
-                    <button
-                      type="button"
-                      className="primary-btn small-btn"
-                      disabled={pinataLoading}
-                      onClick={() => setPinataRunState(pinataAutonomousNext)}
-                    >
-                      {pinataLoading ? 'Updating…' : (pinataRunState === 'running' ? 'Pause autonomous' : 'Activate autonomous')}
-                    </button>
-                    <button
-                      type="button"
-                      className="mini-btn"
-                      disabled={!pinataConnector?.agentChatUrl}
-                      onClick={() => openChatPanel(pinataConnector?.agentChatUrl, 'Trader Agent')}
-                    >Chat</button>
-                    {pinataConnector?.telegramHandle ? (
-                      <a
-                        className="mini-btn"
-                        href={pinataConnector.telegramUrl || `https://t.me/${pinataConnector.telegramHandle.replace(/^@/, '')}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >Telegram</a>
-                    ) : null}
-                  </div>
-                </>
+      {/* MAIN CANVAS */}
+      <main className="lean-canvas">
+
+        {/* MARKETS */}
+        <section className="lean-region">
+          <header className="lean-region-head">
+            <span className="lean-section-label">MARKETS</span>
+            <div className="lean-region-head-r">
+              {streamLoading || streamStatus === 'live' ? (
+                <span className="lean-swarm-running">
+                  <span className="lean-swarm-pulse" aria-hidden="true" />
+                  swarm running
+                </span>
               ) : (
-                <div className="autonomous-empty">
-                  Pinata agent not connected. Visit <a href="/setup/openclaw">setup</a> to deploy and pair the Polymarket trader template.
-                </div>
+                <span className="lean-swarm-idle">{swarmScaleLabel}</span>
               )}
+              <button type="button" className="lean-mini-btn" disabled={marketLoading} onClick={scanMarkets}>{marketLoading ? '…' : 'Scan'}</button>
+              <button type="button" className="lean-mini-btn" disabled={classifyLoading} onClick={classifyUniverse}>{classifyLoading ? '…' : 'Classify'}</button>
             </div>
-          </section>
+          </header>
 
-          <section className="rail-card accent-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">USDC</span>
-                <span className="card-eyebrow">Wallets</span>
-              </div>
-              <span className="card-head-r">polygon-first</span>
-            </div>
-            <div className="card-title">Capital</div>
-            <div className="wallet-hero">
-              <div className="wallet-hero-card">
-                <div className="wallet-kicker">Business Balance</div>
-                <div className="wallet-amount">${formatMoney(spendableBusinessBalance)}</div>
-                <div className="wallet-amount-sub">spendable now · ${formatMoney(trackedBusinessBalance)} tracked</div>
-                <div className="wallet-token-mark">UNIFIED USDC</div>
-              </div>
-            </div>
-            <div className="wallet-balance-grid">
-              <div className="wallet-balance-cell"><span>{treasuryFundingMode.startsWith('polygon') ? 'Polygon available' : 'Gateway available'}</span><strong>${formatMoney(gatewayAvailableBalance)}</strong></div>
-              <div className="wallet-balance-cell"><span>At risk</span><strong>${formatMoney(capitalBalances.deployed_at_risk || 0)}</strong></div>
-              <div className="wallet-balance-cell"><span>Pending credit</span><strong>${formatMoney(pendingCreditBalance)}</strong></div>
-              <div className="wallet-balance-cell"><span>Ops staging</span><strong>${formatMoney(opsStagingBalance)}</strong></div>
-              <div className="wallet-balance-cell"><span>Trading target</span><strong>${formatMoney(tradingPlane.target_balance_usdc || 0)}</strong></div>
-              <div className="wallet-balance-cell"><span>Sweep pending</span><strong>${formatMoney(capitalBalances.profit_sweep_pending || 0)}</strong></div>
-            </div>
-            {hasBalanceMotion ? (
-              <div className="wallet-motion-note">
-                In motion: ${formatMoney(pendingCreditBalance)} pending · ${formatMoney(opsStagingBalance)} staging.
-              </div>
-            ) : null}
-            <div className="capital-subsection">
-              <div className="capital-subhead">Wallet system</div>
-              <div className="wallet-system-grid">
-                <article className="wallet-system-card">
-                  <div className="wallet-system-head">
-                    <span>Treasury Wallet</span>
-                    <span className="wallet-system-tag">vault</span>
-                  </div>
-                  <div className="wallet-system-copy">Reserve, passkey, profits.</div>
-                  <div className="capital-pill-row">
-                    <span className={`capital-pill ${treasuryPlane.passkey_ready ? 'is-ready' : 'is-blocked'}`}>passkey {treasuryPlane.passkey_ready ? 'ready' : 'blocked'}</span>
-                    <span className={`capital-pill ${treasuryPlane.multisig_ready ? 'is-ready' : 'is-blocked'}`}>multisig {treasuryPlane.multisig_ready ? 'ready' : 'blocked'}</span>
-                  </div>
-                  <dl className="metric-list compact">
-                    <div className="metric-row"><dt>Reserve target</dt><dd>{formatUsd(treasuryPlane.reserve_target_usdc || 0)}</dd></div>
-                    <div className="metric-row"><dt>Gateway reserve</dt><dd>{formatUsd(treasuryPlane.gateway_balance_usdc || 0)}</dd></div>
-                    <div className="metric-row"><dt>Funding mode</dt><dd>{treasuryPlane.funding_mode || 'unknown'}</dd></div>
-                    <div className="metric-row"><dt>Address</dt><dd>{treasuryPlane.address ? shorten(treasuryPlane.address, 12) : 'pending'}</dd></div>
-                  </dl>
-                </article>
-                <article className="wallet-system-card">
-                  <div className="wallet-system-head">
-                    <span>Trading Wallet</span>
-                    <span className="wallet-system-tag">agent rail</span>
-                  </div>
-                  <div className="wallet-system-copy">Budgeted Polymarket execution.</div>
-                  <dl className="metric-list compact">
-                    <div className="metric-row"><dt>Venue</dt><dd>{tradingPlane.venue || 'Polymarket'}</dd></div>
-                    <div className="metric-row"><dt>Deployable</dt><dd>{formatUsd(tradingPlane.available_to_deploy_usdc || 0)}</dd></div>
-                    <div className="metric-row"><dt>Replenish tranche</dt><dd>{formatUsd(tradingPlane.replenish_tranche_usdc || 0)}</dd></div>
-                    <div className="metric-row"><dt>Needs replenish</dt><dd>{tradingPlane.replenish_needed ? 'yes' : 'no'}</dd></div>
-                    <div className="metric-row"><dt>Address</dt><dd>{tradingPlane.address ? shorten(tradingPlane.address, 12) : 'pending'}</dd></div>
-                  </dl>
-                </article>
-              </div>
-              {treasuryPlane.shared_with_trading ? (
-                <div className="detail-note">
-                  Treasury signer also funds the trading wallet.
-                </div>
-              ) : null}
-            </div>
-            <div className="capital-subsection">
-              <div className="capital-subhead">Risk Policy</div>
-              <dl className="metric-list compact">
-                <div className="metric-row"><dt>Treasury provision</dt><dd>{formatPolicyPct(capitalPolicy.treasury_provision_pct)}</dd></div>
-                <div className="metric-row"><dt>Per position band</dt><dd>{formatPolicyPct(capitalPolicy.per_position_min_pct)}–{formatPolicyPct(capitalPolicy.per_position_max_pct)}</dd></div>
-                <div className="metric-row"><dt>Min deploy</dt><dd>{formatUsd(capitalPolicy.per_position_min_usdc || 0)}</dd></div>
-                <div className="metric-row"><dt>Max deploy</dt><dd>{formatUsd(capitalPolicy.per_position_max_usdc || 0)}</dd></div>
-              </dl>
-            </div>
-            <div className="capital-subsection">
-              <div className="capital-subhead">Chain Breakdown</div>
-              <div className="wallet-domain-grid">
-                {(domainRows.length ? domainRows : capitalDomains).map((item) => (
-                  <article key={item.key || item.chain} className="wallet-domain-card">
-                    <div className="wallet-domain-head">
-                      <span>{item.label}</span>
-                      <span className="wallet-domain-chip">{item.domain == null ? 'direct' : `d${item.domain}`}</span>
-                    </div>
-                    <div className="wallet-domain-balance">${formatMoney(item.balance_usdc ?? item.balance ?? 0)}</div>
-                    <div className="wallet-domain-copy">{item.role} · {item.detail || 'enabled Gateway domain'}</div>
-                  </article>
-                ))}
-              </div>
-            </div>
-            {(pendingCredits.length || opsStaging.length) ? (
-              <div className="capital-subsection">
-                <div className="capital-subhead">In flight</div>
-                <ul className="capital-list">
-                  {pendingCredits.map((item) => (
-                    <li key={`${item.chain}-${item.estimatedAvailableAt}`} className="capital-item">
-                      <div className="capital-item-head">
-                        <span>{item.chain} finalizing</span>
-                        <span>${formatMoney(item.amount)}</span>
-                      </div>
-                      <div className="capital-item-copy">
-                        {item.status === 'finalizing' ? `ETA ${item.remainingSeconds}s` : 'should be available now'}
-                      </div>
-                    </li>
-                  ))}
-                  {opsStaging.map((item) => (
-                    <li key={`${item.chain}-${item.walletAddress}`} className="capital-item">
-                      <div className="capital-item-head">
-                        <span>{item.chain} ops staging</span>
-                        <span>${formatMoney(item.usdc)}</span>
-                      </div>
-                      <div className="capital-item-copy">{shorten(item.walletAddress, 16)} pending sweep.</div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            <div className="capital-subsection">
-              <div className="capital-subhead">Action rail</div>
-              <div className="wallet-action-rail">
-                <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('deposit')}>Deposit</button>
-                <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('send')}>Send</button>
-                <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('bridge')}>Bridge</button>
-                <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('swap')}>Swap</button>
-                <button type="button" className="mini-btn" onClick={() => setActiveCapitalModal('treasury')}>Treasury</button>
-                {pinataConnector?.onrampChatUrl ? (
-                  <button
-                    type="button"
-                    className="mini-btn mini-btn-accent"
-                    onClick={() => openChatPanel(pinataConnector.onrampChatUrl, 'MoonPay Onramp')}
-                    title="Buy USDC with card via Pinata MoonPay agent"
-                  >Fund via MoonPay</button>
-                ) : null}
-              </div>
-            </div>
-            <div className="capital-subsection">
-              <div className="capital-subhead">Action Graph</div>
-              <ul className="capital-list">
-                {capitalActions.map((item) => (
-                  <li key={item.key} className={`capital-item capital-action ${item.state === 'ready' ? 'is-ready' : 'is-blocked'}`}>
-                    <div className="capital-item-head">
-                      <span>{item.label}</span>
-                      <span>{item.state}</span>
-                    </div>
-                    <div className="capital-item-copy">{item.detail}</div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </section>
-
-          <section className="rail-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">OPS</span>
-                <span className="card-eyebrow">Session</span>
-              </div>
-            </div>
-            {tenantOptions.length > 1 ? (
-              <div className="field-stack">
-                <label className="field-label" htmlFor="tenant-select">Fund</label>
-                <select id="tenant-select" className="field-input" value={selectedTenant} onChange={(event) => setSelectedTenant(event.target.value)}>
-                  {tenantOptions.map((tenant) => <option key={tenant} value={tenant}>{tenant.toUpperCase()}</option>)}
-                </select>
-              </div>
-            ) : null}
-            <dl className="metric-list compact">
-              <div className="metric-row"><dt>Open positions</dt><dd>{visiblePositions.length}</dd></div>
-              <div className="metric-row"><dt>Realized payout</dt><dd>{formatUsd(realizedPayout)}</dd></div>
-              <div className="metric-row"><dt>USDC at risk</dt><dd>{formatUsd(usdcAtRisk)}</dd></div>
-              <div className="metric-row"><dt>Kill switch</dt><dd>{operatorStatus.automation?.kill_switch_enabled ? 'enabled' : 'off'}</dd></div>
-            </dl>
-          </section>
-
-          <section className="rail-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">SPN</span>
-                <span className="card-eyebrow">Sponsor Rails</span>
-              </div>
-              <span className="card-head-r">{readySponsorCount}/{sponsorRows.length || 0}</span>
-            </div>
-            <div className="scenario-copy">
-              Live integrations.
-            </div>
-            <ul className="sponsor-list">
-              {sponsorRows.map((item) => (
-                <li key={item.key} className={`sponsor-item ${item.ready ? 'is-ready' : 'is-blocked'}`}>
-                  <div className="sponsor-row">
-                    <span className="sponsor-name">{item.label}</span>
-                    <span className="sponsor-mode">{item.mode}</span>
-                  </div>
-                  <div className="sponsor-detail">{item.detail}</div>
-                  {item.blocker ? <div className="sponsor-blocker">{item.blocker}</div> : null}
-                </li>
-              ))}
-            </ul>
-            <dl className="metric-list compact sponsor-metrics">
-              <div className="metric-row"><dt>Burner seed</dt><dd>{walletReadiness.burner_seed_ready ? 'ready' : 'missing'}</dd></div>
-              <div className="metric-row"><dt>Treasury key</dt><dd>{walletReadiness.treasury_key_ready ? 'ready' : 'missing'}</dd></div>
-              <div className="metric-row"><dt>Poly key</dt><dd>{walletReadiness.polymarket_key_ready ? 'ready' : 'missing'}</dd></div>
-              <div className="metric-row"><dt>0G key</dt><dd>{walletReadiness.zg_key_ready ? 'ready' : 'missing'}</dd></div>
-              <div className="metric-row"><dt>Gateway bal</dt><dd>{gatewayTreasuryBalance != null ? formatUsd(gatewayTreasuryBalance) : 'unknown'}</dd></div>
-            </dl>
-            <ul className="blocker-list">
-              {nextBlockers.slice(0, 4).map((item) => (
-                <li key={item} className="blocker-item">{item}</li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="rail-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">STATE</span>
-                <span className="card-eyebrow">Scenario</span>
-              </div>
-            </div>
-            <div className="scenario-copy">
-              Rehearse the future.
-            </div>
-            <div className="scenario-stack">
-              {scenarioVariables.map((variable) => (
-                <label key={variable.key} className="scenario-control">
-                  <span className="scenario-head">
-                    <span>{variable.label}</span>
-                    <span>{worldState[variable.key]}</span>
-                  </span>
-                  <input
-                    className="scenario-slider"
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="1"
-                    value={worldState[variable.key]}
-                    onChange={(event) => setWorldState((current) => ({ ...current, [variable.key]: Number(event.target.value) }))}
-                  />
-                </label>
-              ))}
-            </div>
-            <div className="scenario-foot">
-              <span>{swarmScaleLabel}</span>
-              <span>{localOptimumLabel}</span>
-            </div>
-          </section>
-
-          <section className="rail-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">LOG</span>
-                <span className="card-eyebrow">Alerts</span>
-              </div>
-            </div>
-            <ul className="alert-list">
-              {alerts.length ? alerts.map((item) => (
-                <li key={item.id} className={`alert-item ${item.tone}`}>
-                  <span className="alert-time">{item.time}</span>
-                  <span className="alert-text">{item.message}</span>
-                </li>
-              )) : <li className="alert-empty">No alerts yet.</li>}
-            </ul>
-          </section>
-
-          <section className="rail-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">AUD</span>
-                <span className="card-eyebrow">Audit Trail</span>
-              </div>
-            </div>
-            {selectedPosition ? (
-              <div className="audit-block">
-                <div className="audit-title">{shorten(selectedPosition.position_id, 12)}</div>
-                <button className="mini-btn" onClick={() => fetchAudit(selectedPosition.position_id)}>Refresh audit</button>
-              </div>
-            ) : null}
-            <ul className="audit-list">
-              {auditEvents.length ? auditEvents.map((event) => (
-                <li key={`${event.ts}-${event.event}`} className="audit-item">
-                  <span className="audit-event">{event.event}</span>
-                  <span className="audit-status">{event.status}</span>
-                </li>
-              )) : <li className="audit-empty">{selectedPosition ? 'No audit loaded.' : 'Select a position.'}</li>}
-            </ul>
-          </section>
-        </aside>
-
-        <section className="terminal-stage">
-          <section className="stage-card hero-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">SCAN</span>
-                <span className="card-eyebrow">Alpha Board</span>
-              </div>
-              <span className="card-head-r">intel</span>
-            </div>
-            <div className="section-head">
-              <div><h2 className="section-title">Prediction Markets</h2></div>
-              <div className="action-row">
-                <button className="primary-btn" disabled={marketLoading} onClick={scanMarkets}>{marketLoading ? 'Scanning…' : 'Scan'}</button>
-                <button className="secondary-btn" disabled={classifyLoading} onClick={classifyUniverse}>{classifyLoading ? 'Classifying…' : 'Classify'}</button>
-                <button className="secondary-btn" disabled={!selectedMarket || signalLoading} onClick={runSelectedSignal}>{signalLoading ? 'Running…' : 'Run Swarm'}</button>
-                <button className="secondary-btn" disabled={!selectedMarket || streamLoading} onClick={streamSelectedSignal}>{streamLoading ? 'Streaming…' : 'Debate'}</button>
-              </div>
-            </div>
-            <div className="hero-copy">
-              <p>
-                Scan markets. Rehearse outcomes. Deploy small.
-              </p>
-              {bestOpportunity ? (
-                <p className="hero-highlight">
-                  Lead: <strong>{bestOpportunity.question}</strong>
-                  <span>{formatPp(bestOpportunity.signal?.edge?.edge_pp || 0)} edge</span>
-                  <span>{formatFloat(bestOpportunity.signal?.confidence || 0)} confidence</span>
-                  <span>{localOptimumLabel}</span>
-                </p>
-              ) : null}
-            </div>
-            <div className="opportunity-grid">
-              {rankedMarkets.length ? rankedMarkets.map((row) => (
-                <button
+          <ol className="lean-markets">
+            {rankedMarkets.length ? rankedMarkets.map((row) => {
+              const edgePp = Number(row.signal?.edge?.edge_pp || 0)
+              return (
+                <li
                   key={row.market_id}
-                  className={`opportunity-card ${row.market_id === selectedMarketId ? 'active' : ''} ${streamLoading && row.market_id !== selectedMarketId ? 'is-locked' : ''}`}
+                  className={`lean-market-row ${row.market_id === selectedMarketId ? 'is-selected' : ''} ${streamLoading && row.market_id !== selectedMarketId ? 'is-locked' : ''}`}
                   onClick={() => {
+                    if (streamLoading && row.market_id !== selectedMarketId) return
                     setSelectedMarketId(row.market_id)
-                    // Auto-fire the swarm on first click of a market that
-                    // has no cached signal yet. Operators previously had to
-                    // click the card and then click Run Swarm — collapsed
-                    // into one gesture so the verdict + swarm-quality panel
-                    // populate while the operator is still reading the
-                    // market question.
                     if (!signalCache[row.market_id] && !signalLoading && !streamLoading) {
                       runSignalForMarket(row.market_id, { quiet: true })
                     }
                   }}
-                  disabled={streamLoading && row.market_id !== selectedMarketId}
-                  title={streamLoading && row.market_id !== selectedMarketId ? 'Streaming another market — wait for the swarm to finish' : undefined}
                 >
-                  <div className="opportunity-head">
-                    <span className="opportunity-rank">#{row.rank}</span>
-                    <span className="opportunity-score">{row.score.toFixed(1)}</span>
-                  </div>
-                  <div className="opportunity-question">{row.question}</div>
-                  <div className="opportunity-meta">
-                    <span>{formatUsd(row.liquidity_usd)} liq</span>
-                    <span>{formatUsd(row.volume_usd)} vol</span>
-                    <span>{row.signal ? `${formatPp(row.signal.edge?.edge_pp || 0)} edge` : 'unclassified'}</span>
-                    <span>{formatPp(row.scenarioBias || 0)} scenario</span>
-                  </div>
-                </button>
-              )) : <div className="empty-card">Run Scan to load live markets.</div>}
-            </div>
-          </section>
+                  <span className="lean-market-marker">{row.market_id === selectedMarketId ? '▸' : ''}</span>
+                  <span className="lean-market-question">{row.question}</span>
+                  <span className="lean-market-liq">{formatUsd(row.liquidity_usd)}</span>
+                  <span className={`lean-market-edge ${row.signal?.edge ? (edgePp >= 0 ? 'tone-pos' : 'tone-neg') : ''}`}>
+                    {row.signal?.edge ? formatPp(edgePp) : '—'}
+                  </span>
+                  <span className="lean-market-verdict">{row.signal?.edge?.outcome || '—'}</span>
+                  <span className="lean-market-conf">{row.signal ? formatFloat(row.signal.confidence || 0) : '—'}</span>
+                </li>
+              )
+            }) : <li className="lean-empty">Run Scan to load live markets.</li>}
+          </ol>
+        </section>
 
-          <section className="stage-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">THESIS</span>
-                <span className="card-eyebrow">Selected Market</span>
-              </div>
-              <span className="card-head-r">decision</span>
+        {/* SELECTED MARKET — verdict + diagnostics + graph + debate + agent */}
+        <section className="lean-region lean-selected">
+          <header className="lean-region-head">
+            <span className="lean-section-label lean-selected-q">{selectedMarket?.question || 'No market selected'}</span>
+            <div className="lean-region-head-r">
+              <input
+                id="open-amount"
+                type="number"
+                min="1"
+                step="1"
+                className="lean-amount-input"
+                value={openAmount}
+                onChange={(event) => setOpenAmount(Number(event.target.value))}
+              />
+              <span className="lean-amount-unit">USDC</span>
+              <button
+                type="button"
+                className="lean-open-btn"
+                disabled={!canOpenSelected || openLoading}
+                onClick={openSelectedPosition}
+              >{openLoading ? 'Opening…' : 'Open ▸'}</button>
             </div>
-            <div className="section-head narrow">
-              <div><h3 className="section-title small">{selectedMarket?.question || 'No market selected'}</h3></div>
-              <div className="field-inline">
-                <label className="field-label" htmlFor="open-amount">USDC</label>
-                <input id="open-amount" type="number" min="1" step="1" className="field-input small-input" value={openAmount} onChange={(event) => setOpenAmount(Number(event.target.value))} />
-                <button className="primary-btn" disabled={!canOpenSelected || openLoading} onClick={openSelectedPosition}>{openLoading ? 'Opening…' : 'Open Position'}</button>
-              </div>
-            </div>
-            <div className="verdict-grid">
-              <div className="verdict-card">
-                <div className="verdict-label">Verdict</div>
-                <div className="verdict-main">{selectedSignal?.edge?.outcome || 'No verdict yet'}</div>
-                <div className="verdict-meta">
-                  <span>edge {formatPp(selectedSignal?.edge?.edge_pp || 0)}</span>
-                  <span>conf {formatFloat(selectedSignal?.confidence || 0)}</span>
-                  <span>{selectedSignal?.phase || 'idle'}</span>
-                </div>
-                <p className="verdict-copy">
-                  {selectedSignal?.reasoning || 'Run the swarm.'}
-                </p>
-              </div>
-              <div className="factor-card">
-                <div className="verdict-label">Key Factors</div>
-                <ul className="factor-list">
-                  {(selectedSignal?.key_factors || []).length
-                    ? selectedSignal.key_factors.map((factor) => <li key={factor}>{factor}</li>)
-                    : <li className="audit-empty">No factor list yet.</li>}
-                </ul>
-              </div>
-            </div>
-            <SwarmQualityPanel signal={selectedSignal} />
-            <SignalDiagnosticStrip signal={selectedSignal} outcomes={selectedMarket?.outcomes || []} />
-          </section>
+          </header>
 
-          <section className="signal-instruments">
-            <article className="instrument-card">
-              <div className="instrument-head"><span className="card-eyebrow">E-01 Entropy</span><span className="instrument-sub">freeze detector</span></div>
-              <div className="instrument-main">{entropyReading?.tier != null ? `Tier ${entropyReading.tier}` : 'No reading'}</div>
-              <div className="instrument-meta">
-                <span>H {formatFloat(entropyReading?.h_bits || 0)}</span>
-                <span>{entropyReading?.z_score != null ? `z ${formatFloat(entropyReading.z_score)}` : 'cold start'}</span>
-              </div>
-            </article>
-            <article className="instrument-card">
-              <div className="instrument-head"><span className="card-eyebrow">C-02 Cryo</span><span className="instrument-sub">scanner</span></div>
-              <div className="instrument-main">{cryoRows.length} frozen-market leads</div>
-              <div className="instrument-meta"><span>{cryoRows[0] ? cryoRows[0].question || cryoRows[0].slug || 'top row ready' : 'scan pending'}</span></div>
-            </article>
-            <article className="instrument-card">
-              <div className="instrument-head"><span className="card-eyebrow">T-03 Topology</span><span className="instrument-sub">graph risk</span></div>
-              <div className="instrument-main">{topologyStats}</div>
-              <div className="instrument-meta">
-                <span>{topologyData?.stats?.tracked_tokens || 0} tracked tokens</span>
-                <span>threshold {topologyData?.stats?.r_latch || 'n/a'}</span>
-              </div>
-            </article>
-          </section>
+          <div className="lean-verdict-row">
+            <span className={`lean-verdict-outcome ${selectedSignal?.edge?.outcome === 'YES' ? 'tone-pos' : selectedSignal?.edge?.outcome === 'NO' ? 'tone-neg' : ''}`}>
+              {selectedSignal?.edge?.outcome || '—'}
+            </span>
+            <span className="lean-verdict-edge">{formatPp(selectedSignal?.edge?.edge_pp || 0)}</span>
+            <span className="lean-verdict-conf">{formatFloat(selectedSignal?.confidence || 0)}</span>
+            <span className="lean-verdict-divider">·</span>
+            <span className="lean-verdict-agreement">
+              Agreement {selectedSignal?.agreement_score != null ? Number(selectedSignal.agreement_score).toFixed(2) : '—'}
+            </span>
+          </div>
 
-          <section className="stage-card graph-stage-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">GRAPH</span>
-                <span className="card-eyebrow">Swarm Analysis</span>
-              </div>
-              <span className="card-head-r">live</span>
-            </div>
-            <div className="graph-stage-summary">
-              <div className="graph-summary-text">
-                <h3 className="section-title small">Swarm graph</h3>
-                <p className="graph-caption">{graphStatusText}</p>
-                <p className="graph-caption emphasis">Live thesis map.</p>
-              </div>
-            </div>
-            <section className="graph-surface graph-surface-embedded">
+          <SwarmQualityPanel signal={selectedSignal} />
+          <SignalDiagnosticStrip signal={selectedSignal} outcomes={selectedMarket?.outcomes || []} />
+
+          <div className="lean-selected-grid">
+            <div className="lean-graph-cell">
               <GraphPanel
                 graphData={liveGraphData}
                 loading={classifyLoading}
@@ -1738,167 +1470,148 @@ export default function OperatorTerminal() {
                 isSimulating={streamLoading}
                 onRefresh={refreshGraphSurface}
               />
-            </section>
-          </section>
+            </div>
 
-          <section className="stage-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">DEBATE</span>
-                <span className="card-eyebrow">Live Swarm Feed</span>
-              </div>
-              <span className="card-head-r">{streamStatus}</span>
-            </div>
-            <div className="section-head narrow">
-              <div><h3 className="section-title small">Swarm Debate</h3></div>
-            </div>
-            <div className="feed-panel">
-              {swarmFeed.length ? swarmFeed.map((item) => (
-                <div key={item.id} className={`feed-item ${item.kind}`}>
-                  <div className="feed-head">
-                    <span className="feed-kind">{item.kind}</span>
-                    <span className="feed-agent">{item.agent}</span>
+            <div className="lean-side-cell">
+              <div className="lean-debate">
+                <header className="lean-debate-head">
+                  <span className="lean-section-label">DEBATE</span>
+                  <div className="lean-debate-head-r">
+                    <span className={`lean-debate-status s-${(streamStatus || 'idle').replace(/\s.*$/, '')}`}>{streamStatus}</span>
+                    <button type="button" className="lean-mini-btn" disabled={!selectedMarket || streamLoading} onClick={streamSelectedSignal}>
+                      {streamLoading ? 'Streaming' : 'Run'}
+                    </button>
                   </div>
-                  <div className="feed-copy">{item.message}</div>
-                </div>
-              )) : <div className="empty-card">Start Debate.</div>}
-            </div>
-          </section>
-
-          <PortfolioPerformance
-            positions={visiblePositions}
-            treasury={treasuryPlane}
-            trading={tradingPlane}
-            balances={capitalBalances}
-            pendingCreditBalance={pendingCreditBalance}
-            opsStagingBalance={opsStagingBalance}
-          />
-
-          <section className="stage-card">
-            <div className="card-head">
-              <div className="card-head-l">
-                <span className="act-chip">PNL</span>
-                <span className="card-eyebrow">Positions</span>
+                </header>
+                <ol className="lean-debate-feed">
+                  {swarmFeed.length ? swarmFeed.slice(0, 8).map((item) => (
+                    <li key={item.id} className={`lean-debate-item kind-${item.kind}`}>
+                      <span className="lean-debate-agent">{item.agent}</span>
+                      <span className="lean-debate-msg">{item.message}</span>
+                    </li>
+                  )) : <li className="lean-empty">Click Run to start the debate.</li>}
+                </ol>
               </div>
-              <span className="card-head-r">{executionSummary}</span>
-            </div>
-            <div className="section-head narrow">
-              <div><h3 className="section-title small">Positions</h3></div>
-              <button className="secondary-btn" onClick={fetchPositions}>Refresh positions</button>
-            </div>
-            <div className="execution-stack">
-              {!activeVisiblePositions.length ? <div className="empty-card">No active positions.</div> : null}
 
-              {activeVisiblePositions.map((position) => {
-                const stage = inflightStage(position)
-                const elapsed = position.created_at ? nowSecs - Math.floor(position.created_at) : null
-                return (
-                <article key={position.position_id} className={`pos-card ${selectedPosition?.position_id === position.position_id ? 'is-active' : ''}`} onClick={() => setSelectedPositionId(position.position_id)}>
-                  <div className="pos-h">
-                    <div>
-                      <span className="pos-id">{shorten(position.position_id, 12)}</span>
-                      <span className="pos-meta">· {shorten(position.market_id, 14)} · {position.side} {formatUsd(position.usdc_amount)}</span>
-                    </div>
-                    <div className="pos-actions">
-                      <span className={`badge ${statusBadgeClass(position.status)}`}>{position.status}</span>
-                    </div>
+              <AgentPanel
+                pinataConnector={pinataConnector}
+                signal={selectedSignal}
+                thresholds={readinessThresholds}
+                recentEvents={recentAuditEvents}
+                telegramUrl="https://t.me/miro_shark_bot"
+              />
+            </div>
+          </div>
+
+          {selectedSignal?.reasoning ? (
+            <p className="lean-reasoning">{selectedSignal.reasoning}</p>
+          ) : null}
+        </section>
+
+        {/* PNL BENTO */}
+        <PnlBento positions={visiblePositions} />
+
+        {/* POSITIONS */}
+        <section className="lean-region">
+          <header className="lean-region-head">
+            <span className="lean-section-label">POSITIONS</span>
+            <div className="lean-region-head-r">
+              <span className="lean-positions-summary">{executionSummary}</span>
+              <button type="button" className="lean-mini-btn" onClick={fetchPositions}>Refresh</button>
+            </div>
+          </header>
+
+          <ul className="lean-positions">
+            {!visiblePositions.length ? <li className="lean-empty">No positions yet.</li> : null}
+
+            {activeVisiblePositions.map((position) => {
+              const stage = inflightStage(position)
+              const elapsed = position.created_at ? nowSecs - Math.floor(position.created_at) : null
+              const events = orderedAuditForPosition(position.position_id)
+              const isOpen = selectedPositionId === position.position_id
+              return (
+                <li
+                  key={position.position_id}
+                  className={`lean-position lean-position-active ${isOpen ? 'is-open' : ''}`}
+                  onClick={() => setSelectedPositionId(isOpen ? '' : position.position_id)}
+                >
+                  <div className="lean-position-row">
+                    <span className="lean-position-marker">▸</span>
+                    <span className="lean-position-id">{shorten(position.position_id, 12)}</span>
+                    <span className="lean-position-side">{position.side}</span>
+                    <span className="lean-position-amount">{formatUsd(position.usdc_amount)}</span>
+                    <span className="lean-position-stage">{stage?.label || position.status}</span>
+                    {elapsed != null ? <span className="lean-position-elapsed">{formatElapsed(elapsed)}</span> : null}
+                    {stage?.eta ? <span className="lean-position-eta">{stage.eta}</span> : null}
                   </div>
-                  {stage ? (
-                    <div className="pos-inflight">
-                      <span className="pos-inflight-stage">{stage.label}</span>
-                      {stage.eta ? <span className="pos-inflight-eta">{stage.eta}</span> : null}
-                      {elapsed != null ? <span className="pos-inflight-elapsed">elapsed {formatElapsed(elapsed)}</span> : null}
+                  {isOpen && events.length ? (
+                    <div className="lean-position-timeline">
+                      {events.slice(-6).map((event) => (
+                        <span key={`${event.ts}-${event.event}`} className={`lean-tl-event ${timelineClass(event)}`}>
+                          <span className="lean-tl-event-name">{event.event}</span>
+                          {summarizeAuditPayload(event) ? <span className="lean-tl-event-meta">{summarizeAuditPayload(event)}</span> : null}
+                        </span>
+                      ))}
                     </div>
                   ) : null}
-                  <div className="pos-card-grid">
-                    <div className="pos-facts">
-                      <table>
-                        <tbody>
-                          <tr><td>strategy</td><td>{position.strategy}</td></tr>
-                          <tr><td>burner</td><td>{shorten(position.burner_address || '—', 18)}</td></tr>
-                          <tr><td>fund burner</td><td>{summarizeId(position.fund_tx)}</td></tr>
-                          <tr><td>bridge send</td><td>{summarizeId(position.bridge_send_burn_tx)} · {summarizeId(position.bridge_send_mint_tx)}</td></tr>
-                          <tr><td>clob order</td><td>{summarizeId(position.clob_order_id)}</td></tr>
-                          <tr><td>gateway deposit</td><td>{summarizeId(position.gateway_deposit_tx)}</td></tr>
-                          <tr><td>bridge recv</td><td>{summarizeId(position.bridge_recv_burn_tx)} · {summarizeId(position.bridge_recv_mint_tx)}</td></tr>
-                          <tr><td>resolve</td><td>{summarizeId(position.resolve_tx)}</td></tr>
-                          <tr><td>settle</td><td>{summarizeId(position.settle_tx)}</td></tr>
-                          <tr><td>payout</td><td>{position.payout_usdc != null ? formatUsd(position.payout_usdc) : '—'}</td></tr>
-                          {position.error ? <tr><td>error</td><td className="error-text">{position.error}</td></tr> : null}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div className="timeline-wrap">
-                      <div className="timeline-label">Timeline</div>
-                      <div className="timeline">
-                        {orderedAuditForPosition(position.position_id).length ? orderedAuditForPosition(position.position_id).map((event) => (
-                          <div key={`${position.position_id}-${event.ts}-${event.event}`} className={`tl-event ${timelineClass(event)}`}>
-                            <span className="ev">{event.event}</span>
-                            <span className="when">{formatEventTime(event.ts)}</span>
-                            {summarizeAuditPayload(event) ? <span className="pl">{summarizeAuditPayload(event)}</span> : null}
-                          </div>
-                        )) : <div className="tl-empty">no audit events yet</div>}
-                      </div>
-                    </div>
-                  </div>
-                </article>
-                )
-              })}
+                </li>
+              )
+            })}
 
-              <div className={`pos-history-h ${showHistory ? 'open' : ''}`} onClick={() => setShowHistory((value) => !value)}>
-                <span className="chev">History</span>
-                <span>{historicalVisiblePositions.length}</span>
-              </div>
-              <div className={`pos-history-body ${showHistory ? 'open' : ''}`}>
-                {historicalVisiblePositions.map((position) => (
-                  <article key={position.position_id} className="pos-card" onClick={() => setSelectedPositionId(position.position_id)}>
-                    <div className="pos-h">
-                      <div>
-                        <span className="pos-id">{shorten(position.position_id, 12)}</span>
-                        <span className="pos-meta">· {shorten(position.market_id, 14)} · {position.side} {formatUsd(position.usdc_amount)}</span>
-                      </div>
-                      <div className="pos-actions"><span className={`badge ${statusBadgeClass(position.status)}`}>{position.status}</span></div>
-                    </div>
-                    <div className="pos-card-grid">
-                      <div className="pos-facts">
-                        <table>
-                          <tbody>
-                            <tr><td>strategy</td><td>{position.strategy}</td></tr>
-                            <tr><td>payout</td><td>{position.payout_usdc != null ? formatUsd(position.payout_usdc) : '—'}</td></tr>
-                            <tr><td>resolve</td><td>{summarizeId(position.resolve_tx)}</td></tr>
-                            <tr><td>settle</td><td>{summarizeId(position.settle_tx)}</td></tr>
-                            {position.error ? <tr><td>error</td><td className="error-text">{position.error}</td></tr> : null}
-                          </tbody>
-                        </table>
-                      </div>
-                      <div className="timeline-wrap">
-                      <div className="timeline-label">Timeline</div>
-                        <div className="timeline">
-                          {orderedAuditForPosition(position.position_id).length ? orderedAuditForPosition(position.position_id).map((event) => (
-                            <div key={`${position.position_id}-${event.ts}-${event.event}`} className={`tl-event ${timelineClass(event)}`}>
-                              <span className="ev">{event.event}</span>
-                              <span className="when">{formatEventTime(event.ts)}</span>
-                              {summarizeAuditPayload(event) ? <span className="pl">{summarizeAuditPayload(event)}</span> : null}
-                            </div>
-                          )) : <div className="tl-empty">no audit events yet</div>}
-                        </div>
-                      </div>
-                    </div>
-                  </article>
-                ))}
-                {!historicalVisiblePositions.length ? <div className="empty-card">No history.</div> : null}
-              </div>
-            </div>
-          </section>
+            {historicalVisiblePositions.slice(0, showHistory ? historicalVisiblePositions.length : 3).map((position) => {
+              const pnl = position.payout_usdc != null ? Number(position.payout_usdc) - Number(position.usdc_amount) : null
+              const pnlTone = pnl == null ? '' : pnl > 0 ? 'tone-pos' : pnl < 0 ? 'tone-neg' : ''
+              const settleHash = position.settle_tx
+              const settleUrl = explorerUrlFor(settleHash)
+              return (
+                <li key={position.position_id} className="lean-position lean-position-settled">
+                  <div className="lean-position-row">
+                    <span className="lean-position-marker">{position.status === 'failed' ? '✕' : '✓'}</span>
+                    <span className="lean-position-id">{shorten(position.position_id, 12)}</span>
+                    <span className="lean-position-side">{position.side}</span>
+                    <span className="lean-position-amount">{formatUsd(position.usdc_amount)}</span>
+                    <span className="lean-position-status">{position.status}</span>
+                    {position.payout_usdc != null ? (
+                      <span className="lean-position-payout">→ {formatUsd(position.payout_usdc)}</span>
+                    ) : null}
+                    {pnl != null ? (
+                      <span className={`lean-position-pnl ${pnlTone}`}>
+                        {pnl >= 0 ? '+' : '-'}{formatUsd(Math.abs(pnl))}
+                      </span>
+                    ) : null}
+                    {settleUrl ? <a className="lean-position-link" href={settleUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>↗</a> : null}
+                  </div>
+                </li>
+              )
+            })}
+
+            {historicalVisiblePositions.length > 3 ? (
+              <li className="lean-position-history-toggle" onClick={() => setShowHistory((v) => !v)}>
+                {showHistory ? '▴ collapse history' : `▾ show ${historicalVisiblePositions.length - 3} more settled`}
+              </li>
+            ) : null}
+          </ul>
         </section>
+
       </main>
 
       <WalletActionModals
         modal={activeCapitalModal}
-        onClose={() => setActiveCapitalModal('')}
+        onClose={() => { setActiveCapitalModal(''); setFundAgentTransferId('') }}
         capitalPlane={capitalPlane}
-        pinataConnector={pinataConnector}
-        onOpenChat={openChatPanel}
+        tenantId={selectedTenant}
+        fundAgentTransferId={fundAgentTransferId}
+      />
+
+      <AddFundDialog
+        open={addFundOpen}
+        onClose={() => setAddFundOpen(false)}
+        onCreated={(fund) => {
+          // Refresh the funds list and switch into the newly created tenant.
+          fetchFunds({ silent: true }).then(() => {
+            if (fund?.tenant_id) setSelectedTenant(fund.tenant_id)
+          })
+        }}
       />
 
       {chatPanel.open ? (
@@ -1909,8 +1622,8 @@ export default function OperatorTerminal() {
               <span className="pinata-chat-sub">Pinata Agents</span>
             </div>
             <div className="pinata-chat-actions">
-              <a className="mini-btn" href={chatPanel.url} target="_blank" rel="noreferrer">Open in tab</a>
-              <button type="button" className="mini-btn" onClick={closeChatPanel}>Close</button>
+              <a className="lean-mini-btn" href={chatPanel.url} target="_blank" rel="noreferrer">Open in tab</a>
+              <button type="button" className="lean-mini-btn" onClick={closeChatPanel}>Close</button>
             </div>
           </header>
           <iframe
@@ -1920,7 +1633,7 @@ export default function OperatorTerminal() {
             allow="clipboard-write; clipboard-read; payment"
           />
           <footer className="pinata-chat-foot">
-            If the chat does not load, the agent host blocks iframes — use “Open in tab”.
+            If the chat does not load, the agent host blocks iframes — use "Open in tab".
           </footer>
         </aside>
       ) : null}

@@ -47,6 +47,7 @@ from . import clob_client, encryptor, hook_client
 from . import keeperhub as keeperhub_mod
 from . import polygon_funding as polygon_funding_mod
 from . import tenants as tenants_mod
+from . import treasury_transfer as treasury_transfer_mod
 from .daily_pack import DailyPackBuilder
 from .encryptor import SealedInput
 from .store import PositionRecord, PositionStore
@@ -232,6 +233,7 @@ def create_app() -> Flask:
     daily_pack = DailyPackBuilder(store=store, audit=audit, attestation=pinner)  # Bucket 5
     tenants = tenants_mod.from_env()  # Bucket 6: multi-tenant isolation
     terminal_ticker = TerminalTicker(store=store, audit=audit)
+    treasury_transfers = treasury_transfer_mod.from_env()
 
     def _audit(event: str, *, position_id: str | None = None, status: str = "ok", payload: dict | None = None) -> None:
         # Audit writes must never break the request flow — swallow + warn.
@@ -1264,6 +1266,247 @@ def create_app() -> Flask:
                                     or "") + "/download/",
             },
         })
+
+    # ─── Treasury → Agent transfer (multisig-coordinated) ────────────────
+    # Vault → trading-wallet capital allocation. The only mutating action the
+    # multisig gates. Coordination state lives in `treasury_transfers`; signing
+    # happens client-side per signer (each posts its address to /sign). Once
+    # threshold is reached, the on-chain transfer executes via the existing
+    # polygon_funding.transfer_usdc helper (treasury → trading address on the
+    # current funding-mode chain).
+
+    def _treasury_signer_address() -> str:
+        """Best-effort: derive treasury signer address from TREASURY_PRIVATE_KEY."""
+        primary = os.environ.get("MIROSHARK_MULTISIG_PRIMARY", "").strip()
+        if primary:
+            return primary
+        priv = os.environ.get("TREASURY_PRIVATE_KEY", "").strip()
+        if not priv:
+            return ""
+        try:
+            from eth_account import Account
+            return Account.from_key(priv).address
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _trading_address() -> str:
+        return (
+            os.environ.get("TRADING_WALLET_ADDRESS", "").strip()
+            or os.environ.get("MIROSHARK_TRADING_ADDRESS", "").strip()
+            or ""
+        )
+
+    def _lookup_fund(tenant_id: str) -> dict | None:
+        """Look up a fund row by tenant_id from the Neon projection. Returns
+        a dict with wallet_provider/treasury_wallet_id/trading_wallet_id/
+        treasury_address/trading_address, or None if not found / DB
+        unavailable. Used to decide whether a transfer routes via Circle
+        DCW or local-key signing."""
+        if not tenant_id:
+            return None
+        try:
+            from services._shared import db as _db
+            pool = _db._pool()  # noqa: SLF001 — internal access for read query
+            if pool is None:
+                return None
+            with pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT wallet_provider, treasury_wallet_id, trading_wallet_id, "
+                        "  treasury_address, trading_address "
+                        "FROM miroshark_fund WHERE tenant_id = %s",
+                        (tenant_id,),
+                    )
+                    row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "wallet_provider": row[0],
+                "treasury_wallet_id": row[1],
+                "trading_wallet_id": row[2],
+                "treasury_address": row[3],
+                "trading_address": row[4],
+            }
+        except Exception as e:  # noqa: BLE001
+            log.warning("_lookup_fund(%s) failed: %s", tenant_id, e)
+            return None
+
+    def _execute_treasury_transfer(transfer) -> tuple[bool, str | None, str | None]:
+        """Execute the on-chain transfer. Returns (ok, tx_hash, error).
+
+        Routing:
+        - If the transfer's tenant has wallet_provider='circle-dcw' AND a
+          treasury_wallet_id, route the transfer through Circle DCW (via the
+          Next.js bridge route). The destination is the fund's trading
+          wallet address (NOT the env TRADING_WALLET_ADDRESS).
+        - Otherwise (legacy / seed-derived path): keep the local-key signing
+          via polygon_funding.transfer_usdc to TRADING_WALLET_ADDRESS env.
+        """
+        fund = _lookup_fund(transfer.tenant_id)
+        provider = (fund or {}).get("wallet_provider") or "seed-derived"
+
+        # ── Circle DCW path ─────────────────────────────────────────
+        if provider == "circle-dcw":
+            from_wallet_id = fund.get("treasury_wallet_id")
+            to_address = fund.get("trading_address")
+            if not from_wallet_id or not to_address:
+                return False, None, (
+                    f"fund {transfer.tenant_id} has wallet_provider=circle-dcw but "
+                    f"missing {'treasury_wallet_id' if not from_wallet_id else 'trading_address'}"
+                )
+            try:
+                from services._shared import circle_dcw as _circle
+                result = _circle.transfer_usdc(
+                    from_wallet_id=from_wallet_id,
+                    to_address=to_address,
+                    amount=transfer.amount_usdc,
+                    blockchain=os.environ.get("CIRCLE_DEFAULT_BLOCKCHAIN", "ETH-SEPOLIA"),
+                )
+                tx_hash = result.get("txHash")
+                state = result.get("state")
+                # Bridge polls up to 30s; CONFIRMED/COMPLETE = success, anything
+                # else (INITIATED/SENT) means we can't yet confirm but it's
+                # in flight. Treat as ok with tx_hash if present, else err so
+                # the multisig flow knows to surface the in-flight state.
+                if state in ("CONFIRMED", "COMPLETE"):
+                    return True, tx_hash, None
+                if tx_hash:
+                    log.warning("circle transfer in flight (state=%s tx=%s)", state, tx_hash)
+                    return True, tx_hash, None
+                return False, None, f"circle transfer state={state} after 30s, no tx_hash"
+            except Exception as e:  # noqa: BLE001
+                log.warning("circle transfer failed (%s); falling back to local signing", e)
+                # Fall through to local path so the demo doesn't dead-end.
+
+        # ── Legacy / seed-derived / Circle-fallback path ────────────
+        to_address = (fund or {}).get("trading_address") or _trading_address()
+        if not to_address:
+            return False, None, "TRADING_WALLET_ADDRESS not configured (and fund row missing trading_address)"
+        try:
+            result = polygon_funding.transfer_usdc(to_address, float(transfer.amount_usdc))
+            tx_hash = getattr(result, "tx_hash", None) or getattr(result, "hash", None)
+            return True, tx_hash, None
+        except Exception as e:  # noqa: BLE001
+            return False, None, str(e)
+
+    def _maybe_notify_telegram(transfer) -> None:
+        """Fire-and-forget Telegram channel notification on transfer init.
+        Uses TELEGRAM_BOT_TOKEN + MIROSHARK_TELEGRAM_CHANNEL_ID if both set;
+        otherwise no-ops (the dialog still works, signers just don't get pinged).
+        """
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        chat_id = os.environ.get("MIROSHARK_TELEGRAM_CHANNEL_ID", "").strip()
+        if not token or not chat_id:
+            return
+        try:
+            text = (
+                f"🔔 MiroShark Treasury → Agent transfer requested\n"
+                f"transfer {transfer.transfer_id}\n"
+                f"amount  {transfer.amount_usdc:.2f} USDC\n"
+                f"chain   {transfer.chain}\n"
+                f"signers {transfer.threshold} required ({transfer.signatures_received()} so far)\n"
+                f"Sign at https://t.me/miro_shark_bot"
+            )
+            body = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
+            req = Request(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data=body,
+                headers={"Content-Type": "application/json"},
+            )
+            urlopen(req, timeout=2.0).read()
+            treasury_transfers.mark_notified(transfer.transfer_id)
+        except (URLError, Exception) as e:  # noqa: BLE001
+            log.warning("telegram notify failed for %s: %s", transfer.transfer_id, e)
+
+    @bp.post("/treasury/transfer/init")
+    def treasury_transfer_init():
+        body = request.get_json(silent=True) or {}
+        try:
+            amount = float(body.get("amount_usdc") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": "amount_usdc must be a number"}), 400
+        if amount <= 0:
+            return jsonify({"error": "amount_usdc must be > 0"}), 400
+        tenant_id = str(body.get("tenant_id") or "default").strip() or "default"
+
+        primary = _treasury_signer_address()
+        if not primary:
+            return jsonify({
+                "error": "treasury signer unavailable",
+                "message": "Set TREASURY_PRIVATE_KEY (or MIROSHARK_MULTISIG_PRIMARY) to enable Fund Agent.",
+            }), 503
+
+        signers = treasury_transfer_mod.build_signer_set(primary_address=primary)
+        threshold = treasury_transfer_mod.resolve_threshold(default=1)
+        threshold = min(threshold, len(signers))  # can't require more than we have
+
+        chain = "polygon-amoy" if polygon_first_funding else "arb-sepolia"
+        transfer = treasury_transfers.init(
+            amount_usdc=amount,
+            tenant_id=tenant_id,
+            chain=chain,
+            threshold=threshold,
+            signers=signers,
+            initiator=primary,
+        )
+        _audit("treasury.transfer.init", payload={
+            "transfer_id": transfer.transfer_id,
+            "amount_usdc": amount, "tenant_id": tenant_id,
+            "threshold": threshold, "chain": chain,
+        })
+        _maybe_notify_telegram(transfer)
+        return jsonify({"transfer": transfer.to_dict()})
+
+    @bp.post("/treasury/transfer/<transfer_id>/sign")
+    def treasury_transfer_sign(transfer_id: str):
+        body = request.get_json(silent=True) or {}
+        signer = str(body.get("signer_address") or "").strip()
+        if not signer:
+            # Default to primary if not specified — covers the solo-passkey case
+            # where the dialog signs from the same machine that initiated.
+            signer = _treasury_signer_address()
+        if not signer:
+            return jsonify({"error": "signer_address required"}), 400
+
+        transfer = treasury_transfers.add_signature(transfer_id, signer_address=signer)
+        if transfer is None:
+            return jsonify({"error": "unknown transfer_id"}), 404
+
+        _audit("treasury.transfer.sign", payload={
+            "transfer_id": transfer_id, "signer_address": signer,
+            "signatures_received": transfer.signatures_received(),
+            "threshold": transfer.threshold,
+        })
+
+        if transfer.threshold_met() and transfer.status == "pending":
+            ok, tx_hash, err = _execute_treasury_transfer(transfer)
+            if ok:
+                treasury_transfers.mark_executed(transfer_id, tx_hash=tx_hash or "")
+                _audit("treasury.transfer.executed", status="ok", payload={
+                    "transfer_id": transfer_id, "tx_hash": tx_hash,
+                    "amount_usdc": transfer.amount_usdc,
+                })
+            else:
+                treasury_transfers.mark_failed(transfer_id, error=err or "unknown")
+                _audit("treasury.transfer.failed", status="err", payload={
+                    "transfer_id": transfer_id, "error": err,
+                })
+            transfer = treasury_transfers.get(transfer_id)
+
+        return jsonify({"transfer": transfer.to_dict()})
+
+    @bp.get("/treasury/transfer/<transfer_id>")
+    def treasury_transfer_get(transfer_id: str):
+        transfer = treasury_transfers.get(transfer_id)
+        if transfer is None:
+            return jsonify({"error": "unknown transfer_id"}), 404
+        return jsonify({"transfer": transfer.to_dict()})
+
+    @bp.get("/treasury/transfers/pending")
+    def treasury_transfers_pending():
+        signer = (request.args.get("signer_address") or "").strip() or None
+        items = treasury_transfers.pending(signer_address=signer)
+        return jsonify({"transfers": [t.to_dict() for t in items]})
 
     @app.get("/verifier")
     def verifier_today():

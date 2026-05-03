@@ -18,15 +18,222 @@ See [`docs/arch.svg`](./docs/arch.svg) (rendered) or [`docs/arch.html`](./docs/a
 
 ---
 
-## Sponsor tracks (all four wired)
+## Quick start (judge mode — boots the demo in 4 commands)
 
-| Track | Surface |
-|---|---|
-| **Uniswap Foundation** | Custom v4 hook `PrivateSettlementHook` + `HybridFHERC20` (fhUSDC). 38/38 Foundry tests pass. Implements Fhenix's published *Private Prediction Market* case study end-to-end. |
-| **Fhenix CoFHE** | `euint128` treasury → burner → treasury deltas. Real `InEuint128` sealed inputs minted via cofhejs server-side (`cogito /fhe/encrypt`). |
-| **0G** | `cogito` sidecar wraps **0G Storage** (pins seed + simulation envelopes by merkle root) AND **0G Compute** (TeeML-verifiable LLM inference; `LLM_PROVIDER=0g` toggles it). |
-| **KeeperHub** | Every hook tx (`fundBurner`, `markResolved`, `settle`) routes through KeeperHub Direct Execution API when `KEEPERHUB_API_KEY` is set. |
-| **Gensyn AXL** *(bonus)* | 3-node Yggdrasil-routed multi-agent mesh; agents gossip beliefs over `/recv` per-node before consensus. `SWARM_BACKEND=axl` toggles it. |
+```bash
+# 1. install + provision env
+bun install
+cp .env.example .env.local        # then fill DATABASE_URL + TREASURY_PRIVATE_KEY + KEEPERHUB_API_KEY
+cd services && uv sync && cd ..   # python deps incl. psycopg
+
+# 2. boot all sidecars (separate terminals or use the Makefile target)
+bun run dev --filter app          # Next.js operator terminal :3000
+make services                     # signal-gateway :5002 + execution-router :5004 + cogito :5003
+
+# 3. open the lean canvas
+open http://localhost:3000
+
+# 4. run a demo trade
+#    Click any market in the MARKETS list → swarm auto-fires.
+#    Click "Open ▸" → position lands, audit trail streams via SSE.
+#    Refresh the page → state persists from Neon Postgres (positions + audit).
+```
+
+**Verifying sponsor integrations live:** see the *Verifiable demo* table in
+[`SPONSORS.md`](./SPONSORS.md) — one row per sponsor with the exact command
+to confirm it's wired and not stubbed.
+
+## What persists where
+
+The lean console is dual-source: real-time **SSE** for in-flight position
+updates + **Neon Postgres** for boot/refresh state. Python services
+dual-write through `services/_shared/db.py` on every state change, so the
+operator terminal renders the full position history + audit trail + swarm
+runs even after a service restart. Schema lives in `packages/database/index.js`
+(`ensureTables`); read APIs at `apps/app/app/api/db/*`.
+
+| Data | Real-time | Persisted |
+|---|---|---|
+| Positions | SSE `/execution/positions/stream` | `miroshark_position` |
+| Audit timeline | SSE on each `position` event | `miroshark_audit_event` |
+| Swarm runs | SSE `/signal/runs/stream` | `miroshark_swarm_run` |
+| Treasury transfers (multisig) | header polls every 5s | `miroshark_treasury_transfer` |
+
+---
+
+## Sponsor tracks — direct links for judging
+
+One block per sponsor. Each block has the **angle** (what's interesting),
+the **code** (every file that does real work), the **UI** (where to see it
+live in the operator terminal), and a **verify** command (one shell command
+that proves the integration is real, not stubbed). Full depth-of-integration
+breakdown in [`SPONSORS.md`](./SPONSORS.md).
+
+### 🦄 Uniswap Foundation — Best Uniswap API integration
+
+**Angle.** Position size on Polymarket leaks. A serious desk that takes
+real size telegraphs exactly how much they believe. Uniswap v4's hook
+extensibility is the privacy primitive: `PrivateSettlementHook` accepts
+FHE-encrypted `InEuint128` inputs, mints `fhUSDC` (`HybridFHERC20`) for
+per-position burner EOAs, and the hook operator never sees the size.
+
+- **Hook contract:** [`contracts/src/PrivateSettlementHook.sol`](./contracts/src/PrivateSettlementHook.sol)
+- **fhUSDC token:** [`contracts/src/HybridFHERC20.sol`](./contracts/src/HybridFHERC20.sol)
+- **Tests (Foundry):** [`contracts/test/PrivateSettlementHook.t.sol`](./contracts/test/PrivateSettlementHook.t.sol) + [`contracts/test/HybridFHERC20.t.sol`](./contracts/test/HybridFHERC20.t.sol)
+- **Python caller:** [`services/execution_router/hook_client.py`](./services/execution_router/hook_client.py) — `fundBurner`, `markResolved`, `settle`
+- **UI:** Treasury popover (chain breakdown row showing Arb Sepolia hook deployment), Position card timeline events `fund_burner.ok` / `settle.ok`
+- **Verify:** `cd contracts && forge test -vvv` → 38/38 hook tests pass
+
+### 🔐 Fhenix CoFHE — encrypted size on the v4 hook
+
+**Angle.** Fhenix CoFHE is the *primitive* under the Uniswap surface. The
+Solidity hook accepts `InEuint128` sealed inputs; cofhejs server-side
+mints them; the chain stores `euint128` deltas. The treasury knows the
+size, the agent knows the size, the hook operator sees only ciphertext.
+
+- **cogito FHE endpoint:** [`services/cogito/src/fhe.ts`](./services/cogito/src/fhe.ts) — POST `/fhe/encrypt`
+- **Python sealed-input parser:** [`services/execution_router/encryptor.py`](./services/execution_router/encryptor.py) — `SealedInput` maps cogito JSON → Solidity `InEuint128` tuple
+- **Hook consumer:** `PrivateSettlementHook.fundBurner(InEuint128 sealed)` (linked above)
+- **Honest demo gate:** `DEMO_REQUIRE_REAL=1` blocks `DryRunEncryptor` so demo failures surface instead of silently passing — see [`services/execution_router/api.py`](./services/execution_router/api.py) `_check_demo_real_blockers()`
+- **UI:** Position card timeline shows `fund_burner.ok` with `tx_hash`; the size in the DB is the post-decryption recorded amount (operator sees plaintext, chain sees ciphertext)
+- **Verify:** with `COGITO_BASE_URL` + `COGITO_TOKEN` set, `curl localhost:5003/fhe/encrypt -X POST -d '{"value":"100000000"}'` returns a valid `InEuint128` JSON envelope
+
+### 🤖 0G — Best Agent Framework + Best Autonomous Agents/Swarms
+
+**Angle.** Two surfaces: 0G **Storage** pins every swarm artifact (seed
+doc + simulation envelope) by merkle root so a third party can resolve
+the run after the fact; 0G **Compute** runs TeeML-verifiable LLM inference
+that the swarm consumes when `LLM_PROVIDER=0g`. Plus the swarm itself
+(21 agents, 3 nodes, 2 gossip rounds, disagreement-aware aggregation,
+Tetlock superforecaster prompt) is the framework-level work.
+
+- **Storage client:** [`services/cogito/src/zg.ts`](./services/cogito/src/zg.ts) — Indexer.upload + MerkleTree, root-tx-anchored on Galileo
+- **Compute client:** [`services/cogito/src/compute.ts`](./services/cogito/src/compute.ts) — TeeML inference adapter
+- **Chain config + helpers:** [`packages/zero-g/index.js`](./packages/zero-g/index.js)
+- **Swarm runner (framework-level):** [`services/swarm_runner/orchestrator.py`](./services/swarm_runner/orchestrator.py) + [`services/swarm_runner/agent.py`](./services/swarm_runner/agent.py) (Tetlock prompt at `_SUPERFORECASTER_SYS`)
+- **Multi-node mesh:** [`services/swarm_runner/nodes.py`](./services/swarm_runner/nodes.py) + [`services/swarm_runner/axl_client.py`](./services/swarm_runner/axl_client.py)
+- **DB persistence (every run pinned):** column `zg_root` in [`miroshark_swarm_run`](./packages/database/index.js)
+- **UI:** Header `● 0G` health dot (turns amber when signer balance < 0.01 OG); SELECTED MARKET region's swarm graph + DEBATE feed are live SSE from this runner
+- **Verify (storage):** `psql $DATABASE_URL -c "SELECT zg_root, market_id, ts FROM miroshark_swarm_run WHERE zg_root IS NOT NULL ORDER BY ts DESC LIMIT 1"` → resolve the root via [Galileo explorer](https://chainscan-galileo.0g.ai)
+- **Verify (swarm):** `SWARM_BACKEND=axl python -m services.swarm_runner.test_cross_node` → 3-node spawn + gossip log
+
+### 💚 KeeperHub — Best Use of KeeperHub
+
+**Angle.** Every on-chain tx the router sends (hook funding, hook resolve,
+hook settle, treasury bridge sends) routes through KeeperHub Direct
+Execution when `KEEPERHUB_API_KEY` is set — managed gas, retries, nonce
+coordination, `executionId` per tx. Falls back to direct web3 sends in
+dev / dry-run.
+
+- **Client:** [`services/execution_router/keeperhub.py`](./services/execution_router/keeperhub.py) (~200 LoC)
+- **Wired into:** [`services/execution_router/hook_client.py`](./services/execution_router/hook_client.py) (3 hook txs) + [`services/execution_router/capital.py`](./services/execution_router/capital.py) (treasury bridge sends)
+- **Smoke tests:** [`services/execution_router/scripts/smoke_keeperhub.py`](./services/execution_router/scripts/smoke_keeperhub.py) + [`sponsor_smoke_full.py`](./services/execution_router/scripts/sponsor_smoke_full.py)
+- **Audit:** every successful KeeperHub call writes `execution_id` into the audit payload — surfaces in DB column `miroshark_audit_event.payload->>'execution_id'`
+- **UI:** Position card timeline rows show `keeper {execution_id}` for every routed tx
+- **Builder feedback ([`FEEDBACK.md`](./FEEDBACK.md)):** 11 specific items across docs gaps, reproducible bugs, feature requests, and UX friction — eligible for the KeeperHub Builder Feedback Bounty
+- **Verify:** `KEEPERHUB_API_KEY=… python services/execution_router/scripts/smoke_keeperhub.py` → returns `executionId` + tx hash
+
+### 🌐 ENS — Best ENS Integration for AI Agents · Most Creative Use
+
+**Angle.** Autonomous agents need persistent, human-readable identity. The
+Pinata trader (`xt1sgi73`) signs every position with the same EOA — without
+ENS that's an opaque address in the audit log. With ENS it's
+`xt1sgi73.miroshark.eth` whose text records carry `agent.skills` (mirrors
+the AGENT panel: probe · swarm · open · settle), `agent.template`, `org.telegram`,
+`description`. Tenant subnames route too: `fund-a.miroshark.eth` →
+FUND-A trading wallet. **Most-creative angle:** ENS as multi-tenant
+routing key + per-position audit trail (subnames per settled position
+carry market_id, outcome, payout, settle_tx in text records).
+
+- **Resolver package:** [`packages/ens/index.js`](./packages/ens/index.js) — viem-based `resolveEnsAddress`, `reverseResolve`, `getTextRecords`, `resolveIdentity`, plus convention helpers `agentEnsName(id)` and `tenantEnsName(id)`
+- **API route (cached):** [`apps/app/app/api/ens/resolve/route.js`](./apps/app/app/api/ens/resolve/route.js) — 5-min in-memory TTL
+- **UI component:** [`apps/app/components/miroshark/ens-name.jsx`](./apps/app/components/miroshark/ens-name.jsx) — client-cached, hover tooltip shows full address + text records
+- **Wired into:** [`apps/app/components/miroshark/agent-panel.jsx`](./apps/app/components/miroshark/agent-panel.jsx) (AGENT panel header) + [`operator-terminal.jsx`](./apps/app/components/miroshark/operator-terminal.jsx) (Treasury + Agent wallet popover Address rows)
+- **Sepolia subname registration scripts:** [`apps/app/scripts/ens/check.mjs`](./apps/app/scripts/ens/check.mjs) (read-only preflight) + [`apps/app/scripts/ens/register.mjs`](./apps/app/scripts/ens/register.mjs) (idempotent mint of `xt1sgi73`, `fund-a`, `fund-b` subnames + text records under the configured parent)
+- **UI:** open the lean canvas → click Treasury ▾ or Agent ▾ → the Address row resolves any registered `.eth` to its name; hover for tooltip
+- **Env:** `ENS_NETWORK=mainnet|sepolia`, `MAINNET_RPC_URL`, `SEPOLIA_RPC_URL`, `MIROSHARK_AGENT_ENS`, `MIROSHARK_TENANT_ENS_<TENANT_UPPER>`, `MIROSHARK_PARENT_ENS_NAME`, `ENS_REGISTRAR_PRIVATE_KEY` (or fallback to `TREASURY_PRIVATE_KEY`)
+- **Verify (mainnet, no setup):** `curl 'http://localhost:3000/api/ens/resolve?name=vitalik.eth'` → returns address + text records — proves the resolver is real, not stubbed
+- **Verify (sepolia, after registration):** `node apps/app/scripts/ens/check.mjs` → prints owner of `<parent>` + state of each subname
+
+**Dynamic fund creation (the headline demo path) — `+ Add fund` button:**
+
+The operator terminal has a `+ Add fund` button inside the **Agent ▾**
+popover. Click it, give the fund a name (e.g. *"Pinata Macro Fund"*), and
+optionally an ENS alias. The dialog atomically:
+
+1. Inserts a `miroshark_fund` row in Neon (status: provisioning)
+2. Derives a deterministic trading-wallet address from `BURNER_SEED`
+3. Mints the ENS subname `<slug>.miroshark.eth` on Sepolia (setSubnodeRecord)
+4. Sets the address record on the resolver (setAddr)
+5. Sets text records: `miroshark.tenant`, `miroshark.role`, `agent.skills`, `org.telegram`, `description`
+6. Marks the fund row active
+
+The dialog streams each step's tx hash live so judges can click into Etherscan
+mid-provisioning. Idempotent — failures are recoverable; re-clicking the
+same fund name resumes from where it left off.
+
+The same flow runs during onboarding: at the **Treasury** setup step, after
+the treasury wallet is provisioned, an inline "Provision first fund" callout
+opens the same dialog — so a brand-new user reaches the operator terminal
+with their first fund (and its ENS subname) already minted.
+
+**Power-user Sepolia subname runbook (CLI fallback, mostly for redeploys):**
+
+```bash
+# 1. Faucet Sepolia ETH for the registrar signer (TREASURY_PRIVATE_KEY by default).
+node apps/app/scripts/ens/check.mjs
+#    → faucet at https://sepoliafaucet.com or https://www.alchemy.com/faucets/ethereum-sepolia
+
+# 2. Register the parent name on Sepolia (one-time, automated commit-reveal).
+node apps/app/scripts/ens/register-parent.mjs --dry-run   # preview
+node apps/app/scripts/ens/register-parent.mjs             # ~90s, ~0.003 ETH
+
+# 3. Mint the static MiroShark subnames (xt1sgi73, fund-a, fund-b).
+node apps/app/scripts/ens/register.mjs --dry-run
+node apps/app/scripts/ens/register.mjs
+# Each subname costs ~0.0001 ETH in gas; idempotent across runs.
+
+# 4. Surface in the operator terminal:
+#    Add to apps/app/.env.local:
+#      ENS_NETWORK=sepolia
+#      MIROSHARK_AGENT_ENS=xt1sgi73.miroshark.eth
+#      MIROSHARK_TENANT_ENS_FUND_A=fund-a.miroshark.eth
+```
+
+### 🧠 Gensyn AXL — Best Autonomous Agents (bonus track)
+
+**Angle.** 3-node Yggdrasil-routed mesh, 7 agents per node, 2 gossip
+rounds. Each agent runs the same Tetlock superforecaster prompt with a
+persona lens routed by market category (politics / finance / crypto /
+news / general). After round 1 agents gossip beliefs over `/recv` peer
+endpoints; round 2 re-grounds with the consensus context. Aggregation
+uses pairwise L1 distance for `agreement_score` + soft-cap on confidence
+when the swarm splits.
+
+- **Orchestrator:** [`services/swarm_runner/orchestrator.py`](./services/swarm_runner/orchestrator.py) — `run_axl_swarm()` + `stream_axl_swarm()`
+- **Agent (prompt + persona pool):** [`services/swarm_runner/agent.py`](./services/swarm_runner/agent.py)
+- **Mesh wiring:** [`services/swarm_runner/nodes.py`](./services/swarm_runner/nodes.py) + [`services/swarm_runner/axl_client.py`](./services/swarm_runner/axl_client.py)
+- **Cross-node test:** [`services/swarm_runner/test_cross_node.py`](./services/swarm_runner/test_cross_node.py)
+- **Toggle:** `SWARM_BACKEND=axl` (vs `single` for one-shot fallback)
+- **UI:** SELECTED MARKET region's DEBATE feed shows the live SSE per-agent belief stream; `agreement_score` + `minority_report` render in the verdict row + dissent panel
+- **Verify:** `SWARM_BACKEND=axl python -m services.swarm_runner.test_cross_node`
+
+### 🍍 Pinata Cloud — autonomous AI operator
+
+**Angle.** Pinata Cloud hosts the autonomous agent (`xt1sgi73`,
+"Polymarket Trader" template) paired with `@miro_shark_bot` Telegram. The
+agent reaches back over a Cloudflare Tunnel + `MIROSHARK_AGENT_TOKEN`
+bearer auth, calls the same MiroShark verbs the human operator uses
+(probe · swarm · open · settle), and the AGENT panel inside the operator
+terminal shows the agent's live `runState` + decision + skills + last 2
+audit events.
+
+- **Workspace overlay (the agent's brain):** [`apps/app/scripts/pinata-agent-overlay/`](./apps/app/scripts/pinata-agent-overlay/) — MIROSHARK.md, skills/miroshark.md, AGENTS.md, SOUL.md, TOOLS.md, USER.md, manifest.json
+- **Idempotent redeploy script:** [`apps/app/scripts/redeploy-pinata-agent.sh`](./apps/app/scripts/redeploy-pinata-agent.sh)
+- **Connector status API (Next.js):** [`apps/app/app/api/pinata/status/route.js`](./apps/app/app/api/pinata/status/route.js)
+- **AGENT panel (cohesion surface):** [`apps/app/components/miroshark/agent-panel.jsx`](./apps/app/components/miroshark/agent-panel.jsx) — derives the agent's *would-do* decision from the same `edge × confidence` thresholds the agent itself uses
+- **UI:** Top-right Agent ▾ popover → `Autonomous ● running [Pause]` toggle + `Chat` + `Telegram` quick links; AGENT panel inside selected-market region
+- **Verify:** Telegram `@miro_shark_bot` → `/status` → response from xt1sgi73 calling `GET /api/execution/operator/status` over the bearer-authed tunnel
 
 ## Chain topology
 

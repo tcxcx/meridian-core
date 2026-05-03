@@ -182,6 +182,14 @@ class PositionStore:
                     "  data=excluded.data, updated_at=excluded.updated_at",
                     (record.position_id, payload, record.updated_at),
                 )
+        # Mirror to Neon Postgres so the operator-terminal renders persisted
+        # state on boot/refresh without proxying through this service.
+        # Best-effort — failures are logged inside the writer, never raised.
+        try:
+            from services._shared import db as _db
+            _db.write_position(snapshot)
+        except Exception:  # noqa: BLE001
+            pass
         # Publish AFTER releasing the main lock so a slow subscriber can never
         # stall an upsert; queues are bounded — full ones drop oldest.
         self._publish(snapshot)

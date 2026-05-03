@@ -251,9 +251,435 @@ async function ensureTables() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
       `)
+      // Operator-terminal projection tables. Lean console reads from these
+      // on boot; Python services dual-write through services/_shared/db.py
+      // on every state change. SSE keeps live in-flight; DB owns history.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS miroshark_position (
+          position_id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL DEFAULT 'default',
+          market_id TEXT NOT NULL,
+          token_id TEXT,
+          question TEXT,
+          side TEXT NOT NULL,
+          outcome TEXT,
+          usdc_amount NUMERIC(20, 6) NOT NULL,
+          status TEXT NOT NULL,
+          strategy TEXT,
+          burner_address TEXT,
+          fund_tx TEXT,
+          bridge_send_burn_tx TEXT,
+          bridge_send_mint_tx TEXT,
+          clob_order_id TEXT,
+          gateway_deposit_tx TEXT,
+          bridge_recv_burn_tx TEXT,
+          bridge_recv_mint_tx TEXT,
+          resolve_tx TEXT,
+          settle_tx TEXT,
+          payout_usdc NUMERIC(20, 6),
+          opened_by TEXT,
+          error TEXT,
+          extra JSONB NOT NULL DEFAULT '{}'::jsonb,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS miroshark_position_tenant_status_idx
+          ON miroshark_position(tenant_id, status, updated_at DESC);
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS miroshark_position_market_idx
+          ON miroshark_position(market_id, updated_at DESC);
+      `)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS miroshark_audit_event (
+          id BIGSERIAL PRIMARY KEY,
+          position_id TEXT,
+          tenant_id TEXT,
+          event TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'ok',
+          payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+          ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS miroshark_audit_event_position_idx
+          ON miroshark_audit_event(position_id, ts);
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS miroshark_audit_event_tenant_idx
+          ON miroshark_audit_event(tenant_id, ts DESC);
+      `)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS miroshark_swarm_run (
+          id BIGSERIAL PRIMARY KEY,
+          market_id TEXT NOT NULL,
+          tenant_id TEXT,
+          question TEXT,
+          phase TEXT,
+          edge JSONB,
+          consensus JSONB,
+          confidence NUMERIC(8, 6),
+          raw_confidence NUMERIC(8, 6),
+          agreement_score NUMERIC(8, 6),
+          signals JSONB,
+          signals_diagnostic JSONB,
+          reasoning TEXT,
+          key_factors JSONB,
+          minority_report JSONB,
+          zg_root TEXT,
+          ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS miroshark_swarm_run_market_ts_idx
+          ON miroshark_swarm_run(market_id, ts DESC);
+      `)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS miroshark_treasury_transfer (
+          transfer_id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL DEFAULT 'default',
+          amount_usdc NUMERIC(20, 6) NOT NULL,
+          chain TEXT,
+          threshold INTEGER NOT NULL,
+          signers JSONB NOT NULL DEFAULT '[]'::jsonb,
+          initiator TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          tx_hash TEXT,
+          error TEXT,
+          notified BOOLEAN NOT NULL DEFAULT false,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS miroshark_treasury_transfer_status_idx
+          ON miroshark_treasury_transfer(status, created_at DESC);
+      `)
+      // Per-fund row. Each fund is one tenant with its own trading wallet +
+      // ENS subname under the platform parent (miroshark.eth on Sepolia for
+      // the demo). Provisioning is multi-step (DB row → addr derive → ENS
+      // mint → text records) — `provisioning_steps` is the live JSONB log
+      // the AddFundDialog renders during the create flow.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS miroshark_fund (
+          tenant_id TEXT PRIMARY KEY,
+          owner_user_id TEXT NOT NULL,
+          label TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          ens_name TEXT,
+          ens_alias TEXT,
+          treasury_address TEXT,
+          trading_address TEXT,
+          wallet_provider TEXT NOT NULL DEFAULT 'seed-derived',
+          treasury_wallet_id TEXT,
+          trading_wallet_id TEXT,
+          wallet_set_id TEXT,
+          status TEXT NOT NULL DEFAULT 'provisioning',
+          provisioning_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+          error TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `)
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS miroshark_fund_owner_idx
+          ON miroshark_fund(owner_user_id, created_at DESC);
+      `)
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS miroshark_fund_label_idx
+          ON miroshark_fund(label);
+      `)
     })()
   }
   await globalForDatabase.mirosharkTablesPromise
+}
+
+// ─── Operator-terminal read helpers ─────────────────────────────────────
+// All require pool. When DATABASE_URL is missing, return safe empty values
+// so the lean canvas degrades gracefully (still uses SSE for live data).
+
+function rowToPosition(row) {
+  if (!row) return null
+  const tsToEpoch = (v) => (v instanceof Date ? Math.floor(v.getTime() / 1000) : v)
+  return {
+    position_id: row.position_id,
+    tenant_id: row.tenant_id,
+    market_id: row.market_id,
+    token_id: row.token_id,
+    question: row.question,
+    side: row.side,
+    outcome: row.outcome,
+    usdc_amount: row.usdc_amount != null ? Number(row.usdc_amount) : null,
+    status: row.status,
+    strategy: row.strategy,
+    burner_address: row.burner_address,
+    fund_tx: row.fund_tx,
+    bridge_send_burn_tx: row.bridge_send_burn_tx,
+    bridge_send_mint_tx: row.bridge_send_mint_tx,
+    clob_order_id: row.clob_order_id,
+    gateway_deposit_tx: row.gateway_deposit_tx,
+    bridge_recv_burn_tx: row.bridge_recv_burn_tx,
+    bridge_recv_mint_tx: row.bridge_recv_mint_tx,
+    resolve_tx: row.resolve_tx,
+    settle_tx: row.settle_tx,
+    payout_usdc: row.payout_usdc != null ? Number(row.payout_usdc) : null,
+    opened_by: row.opened_by,
+    error: row.error,
+    extra: row.extra || {},
+    created_at: tsToEpoch(row.created_at),
+    updated_at: tsToEpoch(row.updated_at),
+  }
+}
+
+function rowToAudit(row) {
+  if (!row) return null
+  return {
+    id: Number(row.id),
+    position_id: row.position_id,
+    tenant_id: row.tenant_id,
+    event: row.event,
+    status: row.status,
+    payload: row.payload || {},
+    ts: row.ts instanceof Date ? Math.floor(row.ts.getTime() / 1000) : row.ts,
+  }
+}
+
+export async function listPositions({ tenantId = null, limit = 200 } = {}) {
+  if (!pool) return []
+  await ensureTables()
+  const params = []
+  let where = ''
+  if (tenantId) { params.push(tenantId); where = 'WHERE tenant_id = $1' }
+  params.push(limit)
+  const result = await pool.query(
+    `SELECT * FROM miroshark_position ${where}
+     ORDER BY updated_at DESC
+     LIMIT $${params.length}`,
+    params,
+  )
+  return result.rows.map(rowToPosition)
+}
+
+export async function getPosition(positionId) {
+  if (!pool || !positionId) return null
+  await ensureTables()
+  const result = await pool.query(
+    `SELECT * FROM miroshark_position WHERE position_id = $1`,
+    [positionId],
+  )
+  return rowToPosition(result.rows[0] || null)
+}
+
+export async function listAuditByPosition(positionId, { limit = 200 } = {}) {
+  if (!pool || !positionId) return []
+  await ensureTables()
+  const result = await pool.query(
+    `SELECT id, position_id, tenant_id, event, status, payload, ts
+     FROM miroshark_audit_event
+     WHERE position_id = $1
+     ORDER BY ts ASC
+     LIMIT $2`,
+    [positionId, limit],
+  )
+  return result.rows.map(rowToAudit)
+}
+
+export async function recentAuditEvents({ tenantId = null, limit = 20 } = {}) {
+  if (!pool) return []
+  await ensureTables()
+  const params = []
+  let where = ''
+  if (tenantId) { params.push(tenantId); where = 'WHERE tenant_id = $1' }
+  params.push(limit)
+  const result = await pool.query(
+    `SELECT id, position_id, tenant_id, event, status, payload, ts
+     FROM miroshark_audit_event
+     ${where}
+     ORDER BY ts DESC
+     LIMIT $${params.length}`,
+    params,
+  )
+  return result.rows.map(rowToAudit)
+}
+
+export async function latestSwarmRun({ marketId } = {}) {
+  if (!pool || !marketId) return null
+  await ensureTables()
+  const result = await pool.query(
+    `SELECT * FROM miroshark_swarm_run WHERE market_id = $1
+     ORDER BY ts DESC LIMIT 1`,
+    [marketId],
+  )
+  return result.rows[0] || null
+}
+
+export async function listSwarmRuns({ marketId = null, limit = 50 } = {}) {
+  if (!pool) return []
+  await ensureTables()
+  const params = []
+  let where = ''
+  if (marketId) { params.push(marketId); where = 'WHERE market_id = $1' }
+  params.push(limit)
+  const result = await pool.query(
+    `SELECT * FROM miroshark_swarm_run ${where}
+     ORDER BY ts DESC LIMIT $${params.length}`,
+    params,
+  )
+  return result.rows
+}
+
+export async function getTreasuryTransferDb(transferId) {
+  if (!pool || !transferId) return null
+  await ensureTables()
+  const result = await pool.query(
+    `SELECT * FROM miroshark_treasury_transfer WHERE transfer_id = $1`,
+    [transferId],
+  )
+  return result.rows[0] || null
+}
+
+// ─── Funds (per-tenant) ────────────────────────────────────────────────
+function rowToFund(row) {
+  if (!row) return null
+  const tsToEpoch = (v) => (v instanceof Date ? Math.floor(v.getTime() / 1000) : v)
+  return {
+    tenant_id: row.tenant_id,
+    owner_user_id: row.owner_user_id,
+    label: row.label,
+    display_name: row.display_name,
+    ens_name: row.ens_name,
+    ens_alias: row.ens_alias,
+    treasury_address: row.treasury_address,
+    trading_address: row.trading_address,
+    wallet_provider: row.wallet_provider || 'seed-derived',
+    treasury_wallet_id: row.treasury_wallet_id || null,
+    trading_wallet_id: row.trading_wallet_id || null,
+    wallet_set_id: row.wallet_set_id || null,
+    status: row.status,
+    provisioning_steps: row.provisioning_steps || [],
+    error: row.error,
+    created_at: tsToEpoch(row.created_at),
+    updated_at: tsToEpoch(row.updated_at),
+  }
+}
+
+export async function listFunds({ ownerUserId = null, limit = 200 } = {}) {
+  if (!pool) return []
+  await ensureTables()
+  const params = []
+  let where = ''
+  if (ownerUserId) { params.push(ownerUserId); where = 'WHERE owner_user_id = $1' }
+  params.push(limit)
+  const result = await pool.query(
+    `SELECT * FROM miroshark_fund ${where}
+     ORDER BY created_at ASC
+     LIMIT $${params.length}`,
+    params,
+  )
+  return result.rows.map(rowToFund)
+}
+
+export async function getFund(tenantId) {
+  if (!pool || !tenantId) return null
+  await ensureTables()
+  const result = await pool.query(
+    `SELECT * FROM miroshark_fund WHERE tenant_id = $1`,
+    [tenantId],
+  )
+  return rowToFund(result.rows[0] || null)
+}
+
+export async function getFundByLabel(label) {
+  if (!pool || !label) return null
+  await ensureTables()
+  const result = await pool.query(
+    `SELECT * FROM miroshark_fund WHERE label = $1`,
+    [label],
+  )
+  return rowToFund(result.rows[0] || null)
+}
+
+export async function createFund({
+  tenantId, ownerUserId, label, displayName,
+  ensName = null, ensAlias = null,
+  treasuryAddress = null, tradingAddress = null,
+  walletProvider = 'seed-derived',
+  treasuryWalletId = null, tradingWalletId = null, walletSetId = null,
+  status = 'provisioning',
+}) {
+  if (!pool) throw new Error('createFund: DATABASE_URL not configured')
+  await ensureTables()
+  const result = await pool.query(
+    `INSERT INTO miroshark_fund
+      (tenant_id, owner_user_id, label, display_name, ens_name, ens_alias,
+       treasury_address, trading_address, wallet_provider,
+       treasury_wallet_id, trading_wallet_id, wallet_set_id,
+       status, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+     RETURNING *`,
+    [tenantId, ownerUserId, label, displayName, ensName, ensAlias,
+     treasuryAddress, tradingAddress, walletProvider,
+     treasuryWalletId, tradingWalletId, walletSetId, status],
+  )
+  return rowToFund(result.rows[0] || null)
+}
+
+export async function recordFundStep(tenantId, step) {
+  if (!pool || !tenantId) return null
+  await ensureTables()
+  // Append to JSONB array atomically.
+  const result = await pool.query(
+    `UPDATE miroshark_fund
+       SET provisioning_steps = provisioning_steps || $2::jsonb,
+           updated_at = NOW()
+     WHERE tenant_id = $1
+     RETURNING *`,
+    [tenantId, JSON.stringify([{ ...step, ts: step.ts || Date.now() }])],
+  )
+  return rowToFund(result.rows[0] || null)
+}
+
+export async function updateFundStatus(tenantId, {
+  status, ensName, error, treasuryAddress, tradingAddress,
+}) {
+  if (!pool || !tenantId) return null
+  await ensureTables()
+  const sets = []
+  const params = [tenantId]
+  if (status !== undefined)           { sets.push(`status = $${sets.length + 2}`);            params.push(status) }
+  if (ensName !== undefined)          { sets.push(`ens_name = $${sets.length + 2}`);          params.push(ensName) }
+  if (error !== undefined)            { sets.push(`error = $${sets.length + 2}`);             params.push(error) }
+  if (treasuryAddress !== undefined)  { sets.push(`treasury_address = $${sets.length + 2}`);  params.push(treasuryAddress) }
+  if (tradingAddress !== undefined)   { sets.push(`trading_address = $${sets.length + 2}`);   params.push(tradingAddress) }
+  if (!sets.length) return getFund(tenantId)
+  sets.push(`updated_at = NOW()`)
+  const result = await pool.query(
+    `UPDATE miroshark_fund SET ${sets.join(', ')} WHERE tenant_id = $1 RETURNING *`,
+    params,
+  )
+  return rowToFund(result.rows[0] || null)
+}
+
+export async function pendingTreasuryTransfersDb({ signerAddress = null, limit = 20 } = {}) {
+  if (!pool) return []
+  await ensureTables()
+  const result = await pool.query(
+    `SELECT * FROM miroshark_treasury_transfer
+     WHERE status = 'pending'
+     ORDER BY created_at DESC LIMIT $1`,
+    [limit],
+  )
+  let rows = result.rows
+  if (signerAddress) {
+    const sa = String(signerAddress).toLowerCase()
+    rows = rows.filter((row) => {
+      const signers = row.signers || []
+      return signers.some((s) => String(s.address || '').toLowerCase() === sa && !s.signed)
+    })
+  }
+  return rows
 }
 
 export async function readOperatorState(userId) {

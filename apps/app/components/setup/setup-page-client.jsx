@@ -6,6 +6,7 @@ import { SetupProgress as SharedSetupProgress } from '@miroshark/ui/setup-progre
 import { SummaryGrid as SharedSummaryGrid } from '@miroshark/ui/summary-grid'
 import { MirosharkUnicornScene } from '../../../../packages/ui/src/components/unicorn-scene.jsx'
 import { TreasurySetupPanel } from '@/components/miroshark/wallet-action-modals'
+import AddFundDialog from '@/components/miroshark/add-fund-dialog'
 
 const STEP_ORDER = ['workspace', 'treasury', 'trading', 'openclaw', 'launch']
 
@@ -90,6 +91,16 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
   const [busy, setBusy] = useState(false)
   const [openClawBusy, setOpenClawBusy] = useState(false)
   const [error, setError] = useState('')
+  // First-fund creation during onboarding (treasury step). When the user
+  // provisions their first fund here, the AddFundDialog handles slug + ENS
+  // mint inline; we just track that one was created so the trading step can
+  // skip the prompt and the user advances naturally.
+  const [addFundOpen, setAddFundOpen] = useState(false)
+  const [firstFund, setFirstFund] = useState(null)
+  // Pinata Cloud is the recommended hosted-agent option for the OpenClaw step.
+  // We poll /api/pinata/status to detect a paired agent and pre-fill the form.
+  const [pinataConnector, setPinataConnector] = useState(null)
+  const [pinataPingedAt, setPinataPingedAt] = useState(null)
   const [message, setMessage] = useState('')
   const [title, setTitle] = useState(initialStatus?.workspace?.title || 'MiroShark Main Fund')
   const [currentStep, setCurrentStep] = useState(initialStatus?.setup?.currentStep || 'workspace')
@@ -104,9 +115,10 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
   })
 
   const load = async () => {
-    const [statusResponse, openClawResponse] = await Promise.all([
+    const [statusResponse, openClawResponse, pinataResponse] = await Promise.all([
       fetch('/api/setup/status', { cache: 'no-store' }),
       fetch('/api/openclaw/status', { cache: 'no-store' }).catch(() => null),
+      fetch('/api/pinata/status', { cache: 'no-store' }).catch(() => null),
     ])
     const payload = await statusResponse.json().catch(() => ({}))
     if (statusResponse.status === 401) {
@@ -134,6 +146,12 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
     if (openClawResponse) {
       const openClawPayload = await openClawResponse.json().catch(() => null)
       setOpenClawManifest(openClawPayload?.manifest || null)
+    }
+
+    if (pinataResponse) {
+      const pinataPayload = await pinataResponse.json().catch(() => null)
+      setPinataConnector(pinataPayload?.connector || null)
+      setPinataPingedAt(Date.now())
     }
   }
 
@@ -279,11 +297,37 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
         <div className="treasury-focus-stack">
           <TreasurySetupPanel embedded onProvisioned={load} />
           {setup.treasuryProvisioned ? (
-            <div className="treasury-focus-next">
-              <ActionButton tone="secondary" onClick={() => persistStep('trading', '/setup/trading').catch((err) => setError(err instanceof Error ? err.message : String(err)))}>
-                Continue
-              </ActionButton>
-            </div>
+            <>
+              <div className="setup-fund-callout">
+                <div className="setup-fund-callout-head">
+                  <span className="setup-fund-callout-eyebrow">Optional · name your first fund</span>
+                  <h3 className="setup-fund-callout-title">
+                    {firstFund ? `${firstFund.display_name} provisioned` : 'Give the agent a fund to operate'}
+                  </h3>
+                </div>
+                <p className="setup-fund-callout-copy">
+                  Each fund gets its own trading wallet + an ENS subname under{' '}
+                  <code>{process.env.NEXT_PUBLIC_MIROSHARK_PARENT_ENS_NAME || 'miroshark.eth'}</code>{' '}
+                  (e.g. <code>pinata-fund.miroshark.eth</code>). You can also add more from the operator
+                  terminal Agent ▾ popover later.
+                </p>
+                {firstFund ? (
+                  <div className="setup-fund-callout-result">
+                    Tenant <strong>{firstFund.tenant_id}</strong> · ENS{' '}
+                    <strong>{firstFund.ens_name || '(pending)'}</strong>
+                  </div>
+                ) : (
+                  <ActionButton tone="primary" onClick={() => setAddFundOpen(true)}>
+                    + Provision first fund
+                  </ActionButton>
+                )}
+              </div>
+              <div className="treasury-focus-next">
+                <ActionButton tone="secondary" onClick={() => persistStep('trading', '/setup/trading').catch((err) => setError(err instanceof Error ? err.message : String(err)))}>
+                  Continue
+                </ActionButton>
+              </div>
+            </>
           ) : null}
         </div>
       )
@@ -316,9 +360,102 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
     }
 
     if (displayedStep === 'openclaw') {
+      const pinataConnected = Boolean(pinataConnector?.connected)
+      const pinataAgentId = pinataConnector?.agentId || ''
+      const pinataTelegram = pinataConnector?.telegramHandle || '@miro_shark_bot'
+      const pinataChat = pinataConnector?.agentChatUrl || ''
+      const pinataRunState = pinataConnector?.runState || (pinataConnected ? 'idle' : 'offline')
+
       return (
         <StepShell {...currentMeta} routeStep={displayedStep}>
           <div className="field-stack">
+
+            {/* Pinata-recommended callout — shown above the manual form */}
+            <div className={`setup-pinata-callout ${pinataConnected ? 'is-ready' : ''}`}>
+              <div className="setup-pinata-callout-head">
+                <span className="setup-pinata-callout-eyebrow">Recommended · hosted operator agent</span>
+                <h3 className="setup-pinata-callout-title">
+                  {pinataConnected
+                    ? `Pinata Cloud · ${pinataAgentId} · ${pinataRunState}`
+                    : 'Run the operator agent on Pinata Cloud'}
+                </h3>
+              </div>
+              <p className="setup-pinata-callout-copy">
+                MiroShark ships with a "Polymarket Trader" workspace overlay (skills,
+                tools, agent personality) that drops cleanly into a Pinata-Cloud-hosted
+                agent. The agent reaches MiroShark through a Cloudflare Tunnel +
+                bearer-auth so it can call <code>probe · swarm · open · settle</code>
+                on your behalf and report back through Telegram (<code>{pinataTelegram}</code>).
+              </p>
+
+              <ol className="setup-pinata-steps">
+                <li className={pinataConnected ? 'is-done' : ''}>
+                  <span className="setup-pinata-step-num">1</span>
+                  <div className="setup-pinata-step-body">
+                    <strong>Create the agent on Pinata Cloud</strong>
+                    <span>Pick the "Polymarket Prediction Market Trader" template and pair
+                    it with a Telegram bot you own. <a href="https://app.pinata.cloud/agents" target="_blank" rel="noreferrer">Open Pinata ↗</a></span>
+                  </div>
+                </li>
+                <li className={pinataConnected ? 'is-done' : ''}>
+                  <span className="setup-pinata-step-num">2</span>
+                  <div className="setup-pinata-step-body">
+                    <strong>Apply the MiroShark workspace overlay</strong>
+                    <span>Run the idempotent overlay script — it pushes
+                    <code>MIROSHARK.md</code>, <code>skills/miroshark.md</code>,
+                    and edits <code>SOUL.md</code> + <code>TOOLS.md</code> + <code>USER.md</code>
+                    into the agent's git repo so it speaks fluent MiroShark verbs.</span>
+                    <code className="setup-pinata-cmd">bash apps/app/scripts/redeploy-pinata-agent.sh</code>
+                  </div>
+                </li>
+                <li className={pinataConnected ? 'is-done' : ''}>
+                  <span className="setup-pinata-step-num">3</span>
+                  <div className="setup-pinata-step-body">
+                    <strong>Set <code>MIROSHARK_AGENT_TOKEN</code> + expose the tunnel</strong>
+                    <span>Generate a strong token, set it on both the agent (Pinata env) and
+                    your local execution-router + signal-gateway. Use a Cloudflare Tunnel on
+                    a domain you own (the platform demo uses <code>miro-shark.com</code> with
+                    three subdomains: <code>execution.</code>, <code>signal.</code>, <code>cogito.</code>).</span>
+                  </div>
+                </li>
+                <li className={pinataConnected ? 'is-done' : ''}>
+                  <span className="setup-pinata-step-num">4</span>
+                  <div className="setup-pinata-step-body">
+                    <strong>Verify reach-back</strong>
+                    <span>Telegram <code>{pinataTelegram}</code> with <code>/status</code> —
+                    the agent calls <code>GET /api/execution/operator/status</code> over the
+                    bearer-authed tunnel and replies with the operator state.</span>
+                    {pinataChat ? (
+                      <a className="setup-pinata-chat-link" href={pinataChat} target="_blank" rel="noreferrer">
+                        Open the agent chat ↗
+                      </a>
+                    ) : null}
+                  </div>
+                </li>
+              </ol>
+
+              <div className="setup-pinata-status-row">
+                <span className={`setup-pinata-status-dot s-${pinataRunState}`} aria-hidden="true" />
+                <span className="setup-pinata-status-label">
+                  {pinataConnected
+                    ? `Connector live · ${pinataAgentId} · last polled ${pinataPingedAt ? new Date(pinataPingedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}`
+                    : 'No Pinata agent paired yet — once steps 1-3 are done, refresh this page.'}
+                </span>
+                <button
+                  type="button"
+                  className="setup-pinata-refresh"
+                  onClick={() => load().catch(() => null)}
+                >Refresh</button>
+              </div>
+            </div>
+
+            <details className="setup-fallback-details">
+              <summary>Or wire a self-hosted OpenClaw / custom HTTP agent</summary>
+              <p className="setup-pinata-callout-copy" style={{ marginTop: 8 }}>
+                Use this path if you're running OpenClaw on your own infrastructure
+                instead of Pinata Cloud. Same execution-router endpoints; you just bring
+                your own host + key.
+              </p>
             <div className="setup-form-grid">
               <label className="setup-field">
                 <FieldLabel>OpenClaw endpoint</FieldLabel>
@@ -389,6 +526,18 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
                 </ActionButton>
               ) : null}
             </div>
+            </details>
+
+            {/* If Pinata is connected, the OpenClaw step itself is satisfied — show a
+                Continue button up here so users don't feel like they need to also
+                fill the manual form. */}
+            {pinataConnected ? (
+              <div className="setup-actions">
+                <ActionButton tone="primary" onClick={() => persistStep('launch', '/setup/launch').catch((err) => setError(err instanceof Error ? err.message : String(err)))}>
+                  Continue to launch (Pinata agent paired)
+                </ActionButton>
+              </div>
+            ) : null}
           </div>
         </StepShell>
       )
@@ -495,6 +644,12 @@ export default function SetupPageClient({ routeStep, initialStatus = null }) {
           </main>
         </div>
       </div>
+
+      <AddFundDialog
+        open={addFundOpen}
+        onClose={() => setAddFundOpen(false)}
+        onCreated={(fund) => { setFirstFund(fund); load().catch(() => null) }}
+      />
     </MirosharkUnicornScene>
   )
 }

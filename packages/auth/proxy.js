@@ -6,6 +6,12 @@ const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/icon.svg',
+  // Internal cross-service bridge — gates itself with CIRCLE_BRIDGE_TOKEN bearer
+  // (see apps/app/app/api/circle/execute/route.js). Public so the Python
+  // execution_router can call it without a Clerk session.
+  '/api/circle/execute',
+  // Public read-only ENS resolution — no secrets returned, mainnet-aware.
+  '/api/ens/resolve',
 ])
 const isProtectedPageRoute = createRouteMatcher(['/setup(.*)'])
 const isProtectedApiRoute = createRouteMatcher(['/api/(.*)'])

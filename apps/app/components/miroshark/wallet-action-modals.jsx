@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import DialogShell from '@/components/miroshark/dialog-shell'
 import { createTreasurySmartAccount, loginTreasuryCredential, connectTreasurySmartAccount } from '@/lib/circle/modular-client'
@@ -696,7 +696,170 @@ function TreasurySetupDialog({ open, onClose }) {
   return <TreasurySetupPanel open={open} onClose={onClose} />
 }
 
-export default function WalletActionModals({ modal, onClose, capitalPlane }) {
+function FundAgentDialog({ open, onClose, capitalPlane, tenantId, transferId: presetTransferId }) {
+  const [amount, setAmount] = useState('1000')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [transfer, setTransfer] = useState(null)
+  const pollRef = useRef(null)
+
+  const treasuryBalance = Number(capitalPlane?.balances?.gateway_available || capitalPlane?.treasury?.gateway_balance_usdc || 0)
+  const agentBalance = Number(capitalPlane?.trading?.available_to_deploy_usdc || 0)
+  const amountNum = Number(amount) || 0
+  const treasuryAfter = Math.max(0, treasuryBalance - amountNum)
+  const agentAfter = agentBalance + amountNum
+
+  // Reset on open + load preset transfer if provided (e.g., header pending-sig click)
+  useEffect(() => {
+    if (!open) {
+      if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null }
+      return
+    }
+    setError('')
+    if (presetTransferId) {
+      // Resume existing transfer — fetch + start polling
+      void (async () => {
+        try {
+          const res = await fetch(`/execution/api/execution/treasury/transfer/${presetTransferId}`)
+          const json = await res.json()
+          if (res.ok && json.transfer) {
+            setTransfer(json.transfer)
+            setAmount(String(json.transfer.amount_usdc))
+          }
+        } catch (e) { /* ignore */ }
+      })()
+    } else {
+      setTransfer(null)
+      setAmount('1000')
+    }
+  }, [open, presetTransferId])
+
+  // Poll the transfer once it's been initiated, until executed/failed.
+  useEffect(() => {
+    if (!open || !transfer || transfer.status !== 'pending') return
+    if (pollRef.current) return
+    pollRef.current = window.setInterval(async () => {
+      try {
+        const res = await fetch(`/execution/api/execution/treasury/transfer/${transfer.transfer_id}`)
+        const json = await res.json()
+        if (res.ok && json.transfer) setTransfer(json.transfer)
+      } catch (e) { /* ignore */ }
+    }, 2000)
+    return () => {
+      if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null }
+    }
+  }, [open, transfer])
+
+  const init = async () => {
+    setBusy(true); setError('')
+    try {
+      const res = await fetch('/execution/api/execution/treasury/transfer/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount_usdc: amountNum, tenant_id: tenantId || 'default' }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`)
+      setTransfer(json.transfer)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally { setBusy(false) }
+  }
+
+  const sign = async () => {
+    if (!transfer) return
+    setBusy(true); setError('')
+    try {
+      const res = await fetch(`/execution/api/execution/treasury/transfer/${transfer.transfer_id}/sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`)
+      setTransfer(json.transfer)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally { setBusy(false) }
+  }
+
+  const route = `Treasury → Agent on ${transfer?.chain || (capitalPlane?.treasury?.funding_mode || 'polygon-amoy')}`
+
+  return (
+    <DialogShell open={open} onClose={onClose} title="Fund Agent" subtitle="Vault → trading rail">
+      <p className="msk-copy">
+        Allocate vault USDC to the autonomous trading agent. Multisig coordinates
+        the transfer; once threshold reached, the on-chain move executes automatically.
+      </p>
+
+      <div className="msk-balance-grid">
+        <span>From</span>
+        <strong>Treasury · {formatUsd(treasuryBalance)}</strong>
+        <span>To</span>
+        <strong>Agent · {formatUsd(agentBalance)}</strong>
+        <span>After</span>
+        <strong>{formatUsd(treasuryAfter)} → {formatUsd(agentAfter)}</strong>
+        <span>Route</span>
+        <strong>{route}</strong>
+      </div>
+
+      {!transfer ? (
+        <div className="msk-field">
+          <label>Amount (USDC)</label>
+          <input
+            className="msk-input"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value.replace(/[^0-9.]/g, ''))}
+            inputMode="decimal"
+          />
+        </div>
+      ) : (
+        <div className="msk-note-block">
+          <div className="msk-note-title">Multisig — {transfer.signatures_received}/{transfer.threshold} signed</div>
+          <ul className="msk-list msk-signer-list">
+            {transfer.signers.map((s) => (
+              <li key={s.address} className={s.signed ? 'is-signed' : 'is-pending'}>
+                <span className="msk-signer-mark">{s.signed ? '●' : '◯'}</span>
+                <span className="msk-signer-label">{s.label || 'cosigner'}</span>
+                <span className="msk-signer-addr">{s.address.slice(0, 6)}…{s.address.slice(-4)}</span>
+                <span className="msk-signer-state">{s.signed ? 'signed' : 'awaiting'}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="msk-signer-foot">
+            Cosigners notified via Telegram channel ↗ on submit.
+          </div>
+        </div>
+      )}
+
+      {error ? <ResultBanner tone="err">{error}</ResultBanner> : null}
+      {transfer?.status === 'executed' ? (
+        <ResultBanner tone="ok">
+          Executed · {transfer.tx_hash ? `tx ${transfer.tx_hash.slice(0, 10)}…` : 'on-chain confirmed'}
+        </ResultBanner>
+      ) : null}
+      {transfer?.status === 'failed' ? (
+        <ResultBanner tone="err">Failed · {transfer.error}</ResultBanner>
+      ) : null}
+
+      <div className="msk-link-row">
+        {!transfer ? (
+          <ActionButton disabled={busy || amountNum <= 0} onClick={init}>
+            {busy ? 'Initiating…' : 'Sign & Notify'}
+          </ActionButton>
+        ) : transfer.status === 'pending' ? (
+          <ActionButton disabled={busy} onClick={sign}>
+            {busy ? 'Signing…' : 'Add my signature'}
+          </ActionButton>
+        ) : (
+          <SecondaryButton onClick={onClose}>Done</SecondaryButton>
+        )}
+      </div>
+    </DialogShell>
+  )
+}
+
+export default function WalletActionModals({ modal, onClose, capitalPlane, tenantId, fundAgentTransferId }) {
   return (
     <>
       <DepositDialog open={modal === 'deposit'} onClose={onClose} capitalPlane={capitalPlane} />
@@ -704,6 +867,13 @@ export default function WalletActionModals({ modal, onClose, capitalPlane }) {
       <BridgeDialog open={modal === 'bridge'} onClose={onClose} capitalPlane={capitalPlane} />
       <SwapDialog open={modal === 'swap'} onClose={onClose} capitalPlane={capitalPlane} />
       <TreasurySetupDialog open={modal === 'treasury'} onClose={onClose} />
+      <FundAgentDialog
+        open={modal === 'fund-agent'}
+        onClose={onClose}
+        capitalPlane={capitalPlane}
+        tenantId={tenantId}
+        transferId={fundAgentTransferId}
+      />
     </>
   )
 }

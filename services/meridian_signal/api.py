@@ -179,6 +179,40 @@ def run_signal():
         except zg_client.CogitoError as e:
             log.warning("simulation pin failed: %s", e)
 
+    edge_payload = {
+        "outcome": best[0],
+        "swarm_probability": best[1],
+        "market_probability": best[2],
+        "edge_pp": best[3],
+    } if best else None
+
+    # Mirror the swarm result to the Neon projection so the lean console can
+    # show signal history per market without re-running the swarm. Best-effort.
+    try:
+        from services._shared import db as _db
+        _db.write_swarm_run(
+            market_id=market.market_id,
+            question=market.question,
+            phase=out.phase,
+            edge=edge_payload,
+            consensus=out.swarm_prediction,
+            confidence=out.confidence,
+            raw_confidence=out.raw_confidence,
+            agreement_score=out.agreement_score,
+            signals={
+                "entropy": entropy_reading.to_dict() if entropy_reading else None,
+                "entropy_per_outcome": entropy_per_outcome or None,
+                "correlations": correlations_for_seed or None,
+                "cryo": cryo_flag_for_seed,
+            },
+            reasoning=out.reasoning,
+            key_factors=out.key_factors,
+            minority_report=out.minority_report,
+            zg_root=seed_pin.root_hash if seed_pin else None,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     return jsonify({
         "run_id": run_id,
         "market_id": market.market_id,
@@ -195,12 +229,7 @@ def run_signal():
         "reasoning": out.reasoning,
         "key_factors": out.key_factors,
         "contributing_agents": out.contributing_agents,
-        "edge": {
-            "outcome": best[0],
-            "swarm_probability": best[1],
-            "market_probability": best[2],
-            "edge_pp": best[3],            # percentage points
-        } if best else None,
+        "edge": edge_payload,
         # Phase 6 fix: surface every signal that fed into the swarm AND a
         # human-readable diagnostic block so callers (operator UI, Pinata
         # agent) can speak fluently about what fired vs what didn't.
