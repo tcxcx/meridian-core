@@ -2284,6 +2284,199 @@ button {
   color: var(--gry);
 }
 
+/* ── Phase 6 swarm console upgrades ─────────────────────────────────── */
+
+/* Swarm-quality sub-card under the Verdict / Key Factors grid. Mirrors the
+   audit-rail aesthetic but pulls live numbers (agreement_score, raw vs
+   penalised confidence, dissent_summary, minority_report) from /signal/run. */
+.swarm-quality {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--paper, #fafafa);
+  border-left: 3px solid var(--accent, #2a5fff);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.swarm-quality-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.swarm-quality-phase {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  color: var(--gry, #666);
+}
+.swarm-quality-row {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+.swarm-quality-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.swarm-quality-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gry, #666);
+}
+.swarm-quality-bar {
+  height: 6px;
+  background: rgba(0,0,0,0.07);
+  position: relative;
+  overflow: hidden;
+}
+.swarm-quality-bar-fill {
+  height: 100%;
+  background: currentColor;
+  transition: width 320ms ease-out;
+}
+.swarm-quality-bar.tone-ok    { color: #167b3a; }
+.swarm-quality-bar.tone-warn  { color: #8a6d00; }
+.swarm-quality-bar.tone-alert { color: #b32424; }
+.swarm-quality-value {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-weight: 600;
+  font-size: 13px;
+}
+.swarm-quality-conf {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.swarm-quality-conf-main {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-weight: 600;
+  font-size: 13px;
+}
+.swarm-quality-conf-raw {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  color: var(--gry, #666);
+}
+.swarm-quality-dissent {
+  font-size: 11px;
+  color: var(--ink, #111);
+  padding: 6px 8px;
+  background: rgba(42, 95, 255, 0.06);
+  margin-bottom: 6px;
+}
+.swarm-quality-minority {
+  border-top: 1px dashed var(--border, #e2e2e2);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+.swarm-quality-minority summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+}
+.swarm-quality-minority summary::marker { display: none; }
+.swarm-quality-minority summary::-webkit-details-marker { display: none; }
+.swarm-quality-minority-tag {
+  font-weight: 600;
+  color: #b32424;
+}
+.swarm-quality-minority-meta {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  color: var(--gry, #666);
+}
+.swarm-quality-minority-body {
+  margin-top: 8px;
+  padding: 6px 0 4px 8px;
+  border-left: 2px solid #b32424;
+}
+.swarm-quality-minority-probs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 4px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11px;
+}
+.swarm-quality-minority-prob strong { font-weight: 600; }
+.swarm-quality-minority-reasoning {
+  font-size: 11px;
+  color: var(--ink, #111);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Per-market signal-diagnostic strip — chips for E-01/T-03/C-02 with
+   hover-tooltip explaining presence/absence verbatim from
+   signals_diagnostic.note. Anchored under the swarm-quality card. */
+.signal-diagnostic {
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: #fff;
+  border: 1px solid var(--border, #e2e2e2);
+}
+.signal-diagnostic-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+.signal-diagnostic-sub {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  color: var(--gry, #666);
+}
+.signal-diagnostic-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+}
+.signal-diagnostic-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+.signal-diagnostic-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gry, #666);
+}
+.signal-diagnostic-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.signal-diagnostic-foot {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--gry, #666);
+  font-style: italic;
+}
+
+.diag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  border: 1px solid currentColor;
+  background: rgba(255,255,255,0.6);
+  cursor: help;
+  white-space: nowrap;
+}
+.diag-chip-ok    { color: #167b3a; }
+.diag-chip-warn  { color: #8a6d00; }
+.diag-chip-alert { color: #b32424; }
+.diag-chip-info  { color: var(--accent, #2a5fff); }
+.diag-chip-idle  { color: var(--gry, #666); }
+
 /* Pinata Agents — autonomous-mode controls in LOOP card */
 .autonomous-row {
   display: flex;

@@ -114,6 +114,171 @@ function formatElapsed(seconds) {
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
 }
 
+// ── Swarm-quality sub-card ────────────────────────────────────────────────
+// Reads agreement_score, raw_confidence vs confidence, dissent_summary,
+// minority_report from the /api/signal/run response. Visualises:
+//  - agreement bar: green ≥0.85, amber 0.65-0.85, red <0.65
+//  - confidence delta: explicit gap between raw and disagreement-penalised
+//  - minority_report (when present): collapsed expander w/ dissenter details
+function SwarmQualityPanel({ signal }) {
+  if (!signal) return null
+  const raw = Number(signal.raw_confidence ?? signal.confidence ?? 0)
+  const conf = Number(signal.confidence ?? 0)
+  const agree = signal.agreement_score
+  const minority = signal.minority_report
+  const dissent = signal.signals_diagnostic?.dissent_summary || null
+  const hasAxlSignals = signal.agreement_score != null || signal.minority_report
+
+  if (!hasAxlSignals) return null  // swarm-lite path — nothing to show
+
+  const agreePct = agree != null ? Math.max(0, Math.min(1, Number(agree))) : 0
+  const agreeTone = agreePct >= 0.85 ? 'ok' : agreePct >= 0.65 ? 'warn' : 'alert'
+  const confDelta = raw - conf
+  const confDeltaPct = raw > 0 ? confDelta / raw : 0
+
+  return (
+    <div className="swarm-quality">
+      <div className="swarm-quality-head">
+        <span className="card-eyebrow">Swarm quality (AXL)</span>
+        <span className="swarm-quality-phase">{signal.phase || ''}</span>
+      </div>
+      <div className="swarm-quality-row">
+        <div className="swarm-quality-cell">
+          <div className="swarm-quality-label">Agreement</div>
+          <div className={`swarm-quality-bar tone-${agreeTone}`}>
+            <div className="swarm-quality-bar-fill" style={{ width: `${agreePct * 100}%` }} />
+          </div>
+          <div className="swarm-quality-value">{agree != null ? agree.toFixed(3) : '—'}</div>
+        </div>
+        <div className="swarm-quality-cell">
+          <div className="swarm-quality-label">Confidence</div>
+          <div className="swarm-quality-conf">
+            <span className="swarm-quality-conf-main">{conf.toFixed(3)}</span>
+            {confDelta > 0.001 ? (
+              <span className="swarm-quality-conf-raw">
+                raw {raw.toFixed(3)} · disagreement penalty {(confDeltaPct * 100).toFixed(1)}%
+              </span>
+            ) : (
+              <span className="swarm-quality-conf-raw">no disagreement penalty applied</span>
+            )}
+          </div>
+        </div>
+      </div>
+      {dissent ? (
+        <div className="swarm-quality-dissent">{dissent}</div>
+      ) : null}
+      {minority ? (
+        <details className="swarm-quality-minority">
+          <summary>
+            <span className="swarm-quality-minority-tag">⚠ Minority report</span>
+            <span className="swarm-quality-minority-meta">
+              {shorten(minority.agent_id || '?', 18)} · conf {Number(minority.confidence || 0).toFixed(2)} ·
+              dist {Number(minority.distance_from_consensus || 0).toFixed(2)}
+            </span>
+          </summary>
+          <div className="swarm-quality-minority-body">
+            <div className="swarm-quality-minority-probs">
+              {Object.entries(minority.probabilities || {}).map(([o, p]) => (
+                <span key={o} className="swarm-quality-minority-prob">
+                  <strong>{o}</strong> {(Number(p) * 100).toFixed(0)}%
+                </span>
+              ))}
+            </div>
+            <p className="swarm-quality-minority-reasoning">{minority.reasoning || ''}</p>
+          </div>
+        </details>
+      ) : null}
+    </div>
+  )
+}
+
+// ── Signal-diagnostic strip ───────────────────────────────────────────────
+// Per-selected-market signal status. Reads signals_diagnostic + signals.*
+// from /signal/run. Three chips (E-01, T-03, C-02) plus per-outcome
+// entropy chips (one per outcome). Each chip carries a hover tooltip
+// explaining presence/absence verbatim from signals_diagnostic.note.
+function SignalDiagnosticStrip({ signal, outcomes }) {
+  if (!signal) return null
+  const diag = signal.signals_diagnostic || {}
+  const sigs = signal.signals || {}
+  const entropyDiag = diag.entropy || {}
+  const corrDiag = diag.correlations || {}
+  const cryoDiag = diag.cryo || {}
+
+  const entropyPerOutcome = sigs.entropy_per_outcome || {}
+  const correlations = sigs.correlations || []
+  const cryo = sigs.cryo
+
+  const tierTone = (tier) => tier === 0 ? 'ok' : tier === 1 ? 'warn' : tier === 2 ? 'alert' : 'idle'
+
+  return (
+    <div className="signal-diagnostic">
+      <div className="signal-diagnostic-head">
+        <span className="card-eyebrow">Signal diagnostic (per market)</span>
+        <span className="signal-diagnostic-sub">live from /signal/run</span>
+      </div>
+      <div className="signal-diagnostic-row">
+        <div className="signal-diagnostic-group">
+          <div className="signal-diagnostic-label">E-01 entropy per outcome</div>
+          <div className="signal-diagnostic-chips">
+            {(outcomes.length ? outcomes : Object.keys(entropyPerOutcome)).map((outcome) => {
+              const r = entropyPerOutcome[outcome]
+              if (!r) {
+                return (
+                  <span key={outcome} className="diag-chip diag-chip-idle"
+                        title={`${outcome}: order book unavailable`}>
+                    {outcome}: —
+                  </span>
+                )
+              }
+              const tone = tierTone(r.tier)
+              const label = r.frozen ? `tier ${r.tier} frozen` : `tier ${r.tier}`
+              const tip = `${outcome}: tier ${r.tier} (H=${(r.h_bits ?? 0).toFixed(2)}) · ` +
+                          `mid=${r.mid != null ? `$${r.mid.toFixed(3)}` : 'n/a'} · ` +
+                          `spread=${r.spread_bps != null ? `${Math.round(r.spread_bps)}bps` : 'n/a'} · ` +
+                          `bid-depth=${(r.bid_depth ?? 0).toFixed(0)} / ask-depth=${(r.ask_depth ?? 0).toFixed(0)}`
+              return (
+                <span key={outcome} className={`diag-chip diag-chip-${tone}`} title={tip}>
+                  <strong>{outcome}</strong> {label}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+        <div className="signal-diagnostic-group">
+          <div className="signal-diagnostic-label">T-03 correlations</div>
+          <span
+            className={`diag-chip ${correlations.length ? 'diag-chip-warn' : 'diag-chip-idle'}`}
+            title={corrDiag.note || `${correlations.length} markets above |r|=0.70`}
+          >
+            {correlations.length ? `${correlations.length} correlated` : 'none above r=0.70'}
+          </span>
+          {correlations.slice(0, 3).map((c, i) => (
+            <span key={i} className="diag-chip diag-chip-info"
+                  title={`r=${(c.r ?? 0).toFixed(2)}`}>
+              {(c.slug || c.token_id || '?').slice(0, 18)}{(c.slug || '').length > 18 ? '…' : ''} ({(c.r ?? 0).toFixed(2)})
+            </span>
+          ))}
+        </div>
+        <div className="signal-diagnostic-group">
+          <div className="signal-diagnostic-label">C-02 cryo</div>
+          <span
+            className={`diag-chip ${cryo ? 'diag-chip-alert' : 'diag-chip-ok'}`}
+            title={cryoDiag.note || (cryo ? `z-score ${(cryo.z_score ?? 0).toFixed(2)} — abnormally frozen` : 'normal range')}
+          >
+            {cryo ? `⚠ anomaly (z ${(cryo.z_score ?? 0).toFixed(2)})` : 'normal'}
+          </span>
+        </div>
+      </div>
+      {entropyDiag.outcomes_without_book && entropyDiag.outcomes_without_book.length > 0 ? (
+        <div className="signal-diagnostic-foot">
+          Order book unavailable for: {entropyDiag.outcomes_without_book.join(', ')}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function lookupTokenId(market, outcome) {
   const outcomes = market?.outcomes || []
   const tokenIds = market?.token_ids || []
@@ -289,6 +454,27 @@ export default function OperatorTerminal() {
   const executionOnline = routerHealth?.status === 'ok'
   const signalOnline = signalHealth?.status === 'ok'
   const openclawEnabled = Boolean(operatorStatus?.automation?.openclaw_enabled || operatorStatus?.automation?.openclaw_session)
+  // 0G storage pin pill — derived from signal-gateway /health zg_anchor.
+  // The Galileo OG faucet is intermittent + the storage signer often
+  // runs low; surface the balance up-front so judges see whether the
+  // 0G pinning would fire on the next swarm run, not just when it fails.
+  const zgAnchor = signalHealth?.zg_anchor || null
+  const zgStorage = zgAnchor?.storage || null
+  const zgBalanceOg = zgStorage?.balance_og != null ? Number(zgStorage.balance_og) : null
+  const zgOnline = Boolean(zgStorage?.ok)
+  const zgLow = zgBalanceOg != null && zgBalanceOg < 0.01
+  const zgPillTone = !zgOnline ? 'warn' : (zgLow ? 'warn' : '')
+  const zgPillLabel = !zgOnline
+    ? '0G storage off'
+    : zgBalanceOg != null
+      ? `0G ${zgBalanceOg.toFixed(3)} OG${zgLow ? ' (low)' : ''}`
+      : '0G ok'
+  const zgPillTitle = !zgOnline
+    ? 'cogito storage signer unreachable — refill at https://faucet.0g.ai'
+    : zgLow
+      ? `Galileo signer ${zgStorage?.signer || ''} balance is below 0.01 OG. Storage pins will fail. Refill at https://faucet.0g.ai`
+      : `Galileo signer ${zgStorage?.signer || ''} healthy (${zgBalanceOg ?? '?'} OG)`
+
   const pinataConnected = Boolean(pinataConnector?.connected)
   const pinataRunState = pinataConnector?.runState || 'idle'
   const pinataPillTone = pinataConnected
@@ -961,6 +1147,7 @@ export default function OperatorTerminal() {
           <span className="status-pill">{chainLabel}</span>
           <span className={`status-pill ${signalOnline ? '' : 'warn'}`}>signal {signalOnline ? 'online' : 'offline'}</span>
           <span className={`status-pill ${executionOnline ? '' : 'warn'}`}>router {executionOnline ? 'online' : 'offline'}</span>
+          <span className={`status-pill ${zgPillTone}`} title={zgPillTitle}>{zgPillLabel}</span>
           <span className={`status-pill ${pinataPillTone}`} title={pinataConnector?.agentChatUrl || ''}>{pinataPillLabel}</span>
           {pinataConnector?.telegramHandle ? (
             <a
@@ -1489,6 +1676,8 @@ export default function OperatorTerminal() {
                 </ul>
               </div>
             </div>
+            <SwarmQualityPanel signal={selectedSignal} />
+            <SignalDiagnosticStrip signal={selectedSignal} outcomes={selectedMarket?.outcomes || []} />
           </section>
 
           <section className="signal-instruments">
