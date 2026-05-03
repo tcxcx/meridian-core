@@ -103,7 +103,11 @@ Response highlights:
 - `key_factors[]` — short bullet strings; per-agent decompositions + signal-driven adjustments
 - `reasoning` — paragraph from the highest-confidence agent
 - `attestation_envelope` — present when 0G Storage pinning is healthy
-- `seed_hash_0g` / `simulation_hash_0g` — non-null when 0G Storage is up
+- `seed_hash_0g` / `simulation_hash_0g` — non-null when 0G Storage is up. **`simulation_hash_0g: null` is common right now** — Galileo OG faucet is intermittent and the storage signer often runs low. Check `signals_diagnostic` for the cause if Tomas asks why.
+- `signals.entropy_per_outcome` — the per-outcome E-01 reading (spread, depth, tier 0/1/2, H bits) the agents read. Quote the leading-outcome's tier when explaining your size recommendation.
+- `signals.correlations` — list of correlated markets (T-03, |Pearson r| ≥ 0.70). `null` when no peer market exceeds the threshold.
+- `signals.cryo` — cryo anomaly object when this market is abnormally frozen, else `null`.
+- `signals_diagnostic` — **plain-English summary of what fired and why each section is empty when it is.** Always populated. Read this when explaining swarm behavior to Tomas. Has `entropy.{loaded, outcomes_with_book, outcomes_without_book}`, `correlations.{loaded, count, note}`, `cryo.{loaded, note}`, `dissent_summary`. The `note` fields explicitly say e.g. "topology._HIST may not have enough rolling samples yet" so you can explain absences instead of silently omitting them.
 
 **What the swarm now reasons about** (Phase 6 upgrade per polymarket/agents framework + Tetlock superforecaster patterns): each agent sees order-book microstructure (per-outcome spread, depth, entropy tier), correlated-market list (T-03), and cryo anomaly flag (C-02) inside its prompt. They follow a 5-step methodology silently — decompose → base-rate → inside view → update on signals → probabilistic — and apply concrete penalties: discount edge by ≥50% on entropy tier 2, soft-penalise confidence on tier 1, treat sudden cryo freezes as small-size-fast-exit territory, downsize on correlated-market exposure. The persona pool is also category-aware: politics markets get more geopolitical analysts, finance markets get more macro/vol-trader lenses, crypto markets get on-chain/narrative specialists.
 
@@ -221,7 +225,7 @@ Recent audit events across all positions (no position_id filter).
 ## 6. Tenants (rarely needed)
 
 ### GET `${MIROSHARK_EXECUTION_URL}/api/execution/tenants`
-For Tomas's solo deployment, you'll see `[{ "tenant_id": "default", ... }]`. Use that. Don't invent new tenants.
+**Always call this first to see what's registered.** Do not assume `default` exists. For Tomas's deployment as of 2026-05-02 you'll see `fund-a` (Internal Treasury, $250 cap, $20 max, allows arb + directional) and `fund-b` ($100 cap, $5 max, allows arb only). Use `fund-a` for directional trades. See MIROSHARK.md for the canonical guidance.
 
 ---
 
@@ -247,11 +251,20 @@ Requires its own `Authorization: Bearer ${COGITO_TOKEN}` (different secret). For
 ## 9. Error patterns to watch for
 
 - `{"error": "BURNER_SEED not configured"}` (500) → Tomas hasn't set up the burner key yet. Tell him to run setup.
-- `{"error": "tenant 'default' does not allow strategy 'X'", "allowed_strategies": [...]}` (403) → strategy field wrong, retry with one from the list
-- `{"error": "usdc_amount=N exceeds tenant 'default' per_position_max=M"}` (422) → resize down to M and retry
+- `{"error": "unknown tenant_id: 'X'", "known_tenants": [...]}` (403) → you used a tenant that doesn't exist. Pick from `known_tenants` (typically `fund-a` for directional). Don't silently fall back; tell Tomas which tenants are live.
+- `{"error": "tenant 'X' does not allow strategy 'Y'", "allowed_strategies": [...]}` (403) → strategy field wrong, retry with one from `allowed_strategies` (e.g. fund-b only allows `arb`).
+- `{"error": "usdc_amount=N exceeds tenant 'X' per_position_max=M"}` (422) → resize down to M and retry.
 - `{"error": "DEMO_REQUIRE_REAL=1 set...", "blockers": [...]}` (503) → DON'T fall back to MoonPay. Relay blockers verbatim.
-- `{"error": "bridge send failed: ..."}` (502) → check the `position` field in the body for state; tell Tomas which step failed and consider a small retry after 60s
+- `{"error": "bridge send failed: ..."}` (502) → check the `position` field in the body for state; tell Tomas which step failed and consider a small retry after 60s.
 - `{"error": "unauthorized"}` (401) → `MIROSHARK_API_TOKEN` is wrong or missing. Stop and tell Tomas.
+
+### Cogito-side errors that surface in /api/signal/run warnings (not in the response body)
+
+When `signals_diagnostic` shows everything loaded but `simulation_hash_0g: null` is returned, check the signal-gateway logs for a `simulation pin failed` warning. Common causes:
+
+- `cogito /upload 402: 0g_insufficient_funds, signer 0x..., balance_og: 0.001` → the 0G storage signer is below the storage fee on Galileo. Tell Tomas: "Pin failed because the 0G signer is out of OG. Refill at https://faucet.0g.ai (faucet may be intermittent — see `LESSONS.md`)." This is a known long-running issue per Tomas's tech debt log; don't treat it as a swarm bug.
+- `cogito unreachable` → cogito sidecar is down. Tomas needs to bounce the dev stack.
+- `cogito /upload 500: indexer.upload failed` → unexpected error from the 0G indexer; tell Tomas to check cogito's stderr for the underlying cause.
 
 ---
 
