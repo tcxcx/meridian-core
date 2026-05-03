@@ -40,6 +40,36 @@ function isInsufficientFunds(error: unknown): boolean {
   return /insufficient funds|insufficient funds for transfer/i.test(message);
 }
 
+/**
+ * Detect a contract-side revert from the 0G storage flow contract. The
+ * Indexer / Uploader path can fail in two ways that look very different:
+ *
+ * 1. ethers v6 throws `insufficient funds` when the signer can't pay gas
+ *    up-front. Caught by isInsufficientFunds() above.
+ *
+ * 2. The tx is mined but reverts with status:0 — typically because the
+ *    signer didn't include enough native OG to cover the storage fee
+ *    (see Uploader.js: it sends value=storageFee). ethers v6 surfaces
+ *    this as `code: "CALL_EXCEPTION"` with `transaction execution
+ *    reverted` and a non-null receipt with status: 0. The original
+ *    isInsufficientFunds() never matched because the literal phrase
+ *    "insufficient funds" doesn't appear in the revert message.
+ *
+ * This second case is what the user hits when the Galileo signer is
+ * low on OG and the storage fee exceeds available balance. We treat
+ * it as a funding issue and surface ZgFundingError with the same
+ * actionable hint (faucet, refill).
+ */
+function isContractRevert(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const e = error as { code?: string; receipt?: { status?: number } };
+  const message = error instanceof Error ? error.message : String(error);
+  if (e.code === "CALL_EXCEPTION") return true;
+  if (e.receipt && e.receipt.status === 0) return true;
+  if (/transaction execution reverted/i.test(message)) return true;
+  return false;
+}
+
 export class ZgClient {
   private signer: ethers.Wallet;
   private indexer: Indexer;
@@ -81,10 +111,16 @@ export class ZgClient {
 
     const [tx, uploadErr] = await this.indexer.upload(data, this.rpcUrl, this.signer);
     if (uploadErr) {
-      if (isInsufficientFunds(uploadErr)) {
+      if (isInsufficientFunds(uploadErr) || isContractRevert(uploadErr)) {
+        const status = await this.status().catch(() => null);
+        const balanceHint = status ? ` (current balance: ${status.balance_og} OG)` : "";
+        const cause = isInsufficientFunds(uploadErr)
+          ? "insufficient gas to send the storage tx"
+          : "storage contract reverted (typically because the signer can't cover the storage fee)";
         throw new ZgFundingError(
-          `0G signer ${this.signer.address} needs more Galileo OG for storage upload gas.`,
-          await this.status().catch(() => null),
+          `0G signer ${this.signer.address} could not pin to Galileo: ${cause}${balanceHint}. ` +
+            `Refill at https://faucet.0g.ai (faucet may be intermittent — see LESSONS.md).`,
+          status,
         );
       }
       throw new Error(`indexer.upload failed: ${uploadErr}`);

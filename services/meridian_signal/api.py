@@ -201,8 +201,54 @@ def run_signal():
             "market_probability": best[2],
             "edge_pp": best[3],            # percentage points
         } if best else None,
+        # Phase 6 fix: surface every signal that fed into the swarm AND a
+        # human-readable diagnostic block so callers (operator UI, Pinata
+        # agent) can speak fluently about what fired vs what didn't.
+        # Without this, the agent had to say "correlations: not present"
+        # because the API hid them entirely — even when they had been
+        # fetched and passed to the seed_doc successfully.
         "signals": {
+            # Per-outcome microstructure (E-01) the leading-edge agent saw,
+            # plus the legacy single-token reading used for confidence_bias.
             "entropy": entropy_reading.to_dict() if entropy_reading else None,
+            "entropy_per_outcome": entropy_per_outcome or None,
+            # T-03: empty list when no peer markets exceed |r| >= 0.70.
+            "correlations": correlations_for_seed or None,
+            # C-02: null when this market is NOT abnormally frozen.
+            "cryo": cryo_flag_for_seed,
+        },
+        "signals_diagnostic": {
+            # What did seed.build_seed_document actually receive?
+            # `loaded` = section was present in seed_doc; `count` / `note`
+            # explains why a section is empty when it is.
+            "entropy": {
+                "loaded": bool(entropy_per_outcome),
+                "outcomes_with_book": list(entropy_per_outcome.keys()) if entropy_per_outcome else [],
+                "outcomes_without_book": [o for o in market.outcomes if o not in (entropy_per_outcome or {})],
+            },
+            "correlations": {
+                "loaded": bool(correlations_for_seed),
+                "count": len(correlations_for_seed) if correlations_for_seed else 0,
+                "note": (
+                    "no peer markets above |r|=0.70 — topology._HIST may not have enough rolling samples yet, "
+                    "or this market is genuinely uncorrelated with current Polymarket leaders"
+                ) if not correlations_for_seed else None,
+            },
+            "cryo": {
+                "loaded": cryo_flag_for_seed is not None,
+                "note": (
+                    "cryo.scan() did not flag this market — entropy z-score within normal range "
+                    "(threshold = -1.5)"
+                ) if cryo_flag_for_seed is None else None,
+            },
+            # Disagreement summary — supplements minority_report with a
+            # plain-English line whether or not a dissent survived.
+            "dissent_summary": (
+                f"swarm aligned (agreement_score={out.agreement_score}); "
+                f"no agent diverged from consensus by L1 distance >= 0.20 with confidence >= 0.5"
+            ) if out.minority_report is None and out.agreement_score is not None else (
+                f"split swarm (agreement_score={out.agreement_score}); minority_report carries the strongest dissent"
+            ) if out.minority_report else None,
         },
         "phase": out.phase,
         "model": out.model,
