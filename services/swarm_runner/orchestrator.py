@@ -9,6 +9,7 @@ contributing_agents populated by AXL agent IDs (proves cross-node comms ran).
 from __future__ import annotations
 
 import logging
+import math
 import os
 import queue
 import time
@@ -28,16 +29,58 @@ from .nodes import NodeMesh, RunningNode
 log = logging.getLogger("meridian.swarm.orchestrator")
 
 
+def _shannon_entropy(probs: dict[str, float]) -> float:
+    """H = -Σ p log2 p. Bounded by log2(n_outcomes). 0 = total agreement,
+    log2(n) = uniform. Used as a swarm-level disagreement gauge."""
+    h = 0.0
+    for p in probs.values():
+        if p > 0.0:
+            h -= p * math.log2(p)
+    return h
+
+
+def _belief_disagreement(beliefs: list[Belief], outcomes: list[str]) -> float:
+    """Mean pairwise L1 distance between agent probability vectors,
+    normalized to 0..1. 0 = unanimous, 1 = maximum spread.
+
+    L1 distance between two probability vectors over n outcomes ranges
+    [0, 2]; we divide by 2 to land in [0, 1]. Mean over all C(n_agents, 2)
+    pairs gives a single gauge of how split the swarm is."""
+    if len(beliefs) < 2:
+        return 0.0
+    pairs = 0
+    total = 0.0
+    for i in range(len(beliefs)):
+        for j in range(i + 1, len(beliefs)):
+            d = sum(
+                abs(beliefs[i].probabilities.get(o, 0.0) - beliefs[j].probabilities.get(o, 0.0))
+                for o in outcomes
+            )
+            total += d / 2.0
+            pairs += 1
+    return (total / pairs) if pairs else 0.0
+
+
+def _agreement_score(beliefs: list[Belief], outcomes: list[str]) -> float:
+    """1.0 = unanimous, 0.0 = maximum disagreement. Inverse of the
+    pairwise L1 disagreement gauge — a single number callers can read."""
+    return round(1.0 - _belief_disagreement(beliefs, outcomes), 3)
+
+
 def _aggregate_beliefs(
     beliefs: list[Belief],
     outcomes: list[str],
-) -> tuple[dict[str, float], float]:
-    """Confidence-weighted average of probabilities across all final beliefs.
+) -> tuple[dict[str, float], float, float]:
+    """Confidence-weighted average + disagreement-aware confidence.
 
-    Returns (consensus_prediction, mean_confidence).
+    Returns (consensus_prediction, mean_confidence_after_disagreement_penalty,
+    raw_mean_confidence). The penalty: when the swarm is split (mean pairwise
+    L1 distance > 0.30), we soft-cap the consensus confidence by multiplying
+    by (1 - 0.5 * normalized_disagreement). Splits should not look as
+    confident as a unanimous swarm.
     """
     if not beliefs:
-        return ({o: 1.0 / len(outcomes) for o in outcomes}, 0.0)
+        return ({o: 1.0 / len(outcomes) for o in outcomes}, 0.0, 0.0)
 
     weights = [max(b.confidence, 0.05) for b in beliefs]
     total_w = sum(weights)
@@ -47,17 +90,35 @@ def _aggregate_beliefs(
         consensus[o] = weighted / total_w
     norm = sum(consensus.values()) or 1.0
     consensus = {o: v / norm for o, v in consensus.items()}
-    mean_conf = sum(weights) / len(weights)
-    return consensus, mean_conf
+    raw_mean_conf = sum(weights) / len(weights)
+
+    # Disagreement penalty: split swarms should be less confident than unanimous ones.
+    disagreement = _belief_disagreement(beliefs, outcomes)
+    if disagreement > 0.30:
+        penalty_mult = max(0.5, 1.0 - 0.5 * (disagreement - 0.30) / 0.70)
+        adjusted_conf = raw_mean_conf * penalty_mult
+    else:
+        adjusted_conf = raw_mean_conf
+    return consensus, adjusted_conf, raw_mean_conf
 
 
-def _summarise_reasoning(beliefs: list[Belief]) -> tuple[str, list[str]]:
-    """Pick the highest-confidence reasoning + extract distinct factor bullets."""
+def _summarise_reasoning(
+    beliefs: list[Belief], outcomes: list[str], consensus: dict[str, float],
+) -> tuple[str, list[str], dict | None]:
+    """Pick the highest-confidence reasoning + extract distinct factor bullets +
+    surface the strongest dissenter when the swarm is split.
+
+    Dissenter selection: agent whose probability vector is furthest from the
+    consensus by L1 distance, weighted by their stated confidence (a confident
+    dissenter is more interesting than a low-conf one).
+
+    Returns (head_reasoning, key_factors, minority_report_or_None).
+    """
     if not beliefs:
-        return ("", [])
+        return ("", [], None)
     sorted_b = sorted(beliefs, key=lambda b: b.confidence, reverse=True)
     head = sorted_b[0].reasoning
-    # take the first sentence of the next 5 distinct agents as "key factors"
+
     seen: set[str] = set()
     factors: list[str] = []
     for b in sorted_b[1:6]:
@@ -65,13 +126,35 @@ def _summarise_reasoning(beliefs: list[Belief]) -> tuple[str, list[str]]:
         if first_sent and first_sent not in seen:
             seen.add(first_sent)
             factors.append(first_sent)
-    return head, factors
+
+    # Minority report: only surface when at least one agent is meaningfully
+    # off-consensus AND speaking with confidence (>= 0.5).
+    minority_report: dict | None = None
+    best_dissent_score = 0.0
+    for b in beliefs:
+        l1 = sum(abs(b.probabilities.get(o, 0.0) - consensus.get(o, 0.0)) for o in outcomes) / 2.0
+        if l1 < 0.20 or b.confidence < 0.5:
+            continue
+        score = l1 * b.confidence
+        if score > best_dissent_score:
+            best_dissent_score = score
+            minority_report = {
+                "agent_id": b.agent_id,
+                "confidence": round(b.confidence, 3),
+                "probabilities": {o: round(b.probabilities.get(o, 0.0), 3) for o in outcomes},
+                "distance_from_consensus": round(l1, 3),
+                "reasoning": b.reasoning,
+            }
+    return head, factors, minority_report
 
 
 @dataclass
 class SwarmRunResult:
     consensus: dict[str, float]
-    confidence: float
+    confidence: float            # disagreement-penalised
+    raw_confidence: float        # unpenalised mean
+    agreement_score: float       # 1.0 unanimous, 0.0 maximum spread
+    minority_report: dict | None # strongest confident dissenter, or None when swarm is aligned
     reasoning: str
     key_factors: list[str]
     contributing_agents: list[str]
@@ -208,12 +291,16 @@ def stream_axl_swarm(
             for fut in as_completed(futures):
                 fut.result  # propagate worker exits
 
-        consensus, mean_conf = _aggregate_beliefs(final_beliefs, outcomes)
-        reasoning, factors = _summarise_reasoning(final_beliefs)
+        consensus, adj_conf, raw_conf = _aggregate_beliefs(final_beliefs, outcomes)
+        agreement = _agreement_score(final_beliefs, outcomes)
+        reasoning, factors, minority = _summarise_reasoning(final_beliefs, outcomes, consensus)
         elapsed = time.perf_counter() - t0
         result = SwarmRunResult(
             consensus=consensus,
-            confidence=round(mean_conf, 3),
+            confidence=round(adj_conf, 3),
+            raw_confidence=round(raw_conf, 3),
+            agreement_score=agreement,
+            minority_report=minority,
             reasoning=reasoning,
             key_factors=factors,
             contributing_agents=[b.agent_id for b in final_beliefs],
@@ -225,6 +312,9 @@ def stream_axl_swarm(
         yield {"type": "result", "result": {
             "consensus": result.consensus,
             "confidence": result.confidence,
+            "raw_confidence": result.raw_confidence,
+            "agreement_score": result.agreement_score,
+            "minority_report": result.minority_report,
             "reasoning": result.reasoning,
             "key_factors": result.key_factors,
             "contributing_agents": result.contributing_agents,
@@ -293,13 +383,17 @@ def run_axl_swarm(
                 except Exception as e:
                     log.warning("agent crashed: %s", e)
 
-        consensus, mean_conf = _aggregate_beliefs(final_beliefs, outcomes)
-        reasoning, factors = _summarise_reasoning(final_beliefs)
+        consensus, adj_conf, raw_conf = _aggregate_beliefs(final_beliefs, outcomes)
+        agreement = _agreement_score(final_beliefs, outcomes)
+        reasoning, factors, minority = _summarise_reasoning(final_beliefs, outcomes, consensus)
         elapsed = time.perf_counter() - t0
 
         return SwarmRunResult(
             consensus=consensus,
-            confidence=round(mean_conf, 3),
+            confidence=round(adj_conf, 3),
+            raw_confidence=round(raw_conf, 3),
+            agreement_score=agreement,
+            minority_report=minority,
             reasoning=reasoning,
             key_factors=factors,
             contributing_agents=[b.agent_id for b in final_beliefs],

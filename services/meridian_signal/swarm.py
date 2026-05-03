@@ -21,7 +21,7 @@ log = logging.getLogger("meridian.swarm")
 @dataclass
 class SwarmOutput:
     swarm_prediction: dict[str, float]   # outcome → predicted probability (sums to ~1.0)
-    confidence: float                    # 0..1, swarm consensus strength
+    confidence: float                    # 0..1, disagreement-penalised
     reasoning: str                       # one paragraph
     key_factors: list[str]               # 3-6 bullets
     contributing_agents: list[str]       # AXL agent IDs in Phase 2; [] in Phase 1
@@ -31,6 +31,10 @@ class SwarmOutput:
     # LLM_PROVIDER != "0g" (no TEE attestation available from OpenAI etc.).
     # Shape: {chat_id, valid, provider, model, ...}
     attestation_envelope: dict | None = None
+    # Phase-6 swarm-quality fields (None for swarm-lite, populated for AXL).
+    raw_confidence: float | None = None       # unpenalised mean confidence
+    agreement_score: float | None = None      # 1.0 unanimous → 0.0 max spread
+    minority_report: dict | None = None       # strongest confident dissenter or None
 
 
 _SYSTEM_PROMPT = (
@@ -182,6 +186,9 @@ def run_swarm_axl(
         model=os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini"),
         phase=f"2-axl-mesh ({len(result.node_keys)}-node, {result.raw_beliefs} beliefs)",
         attestation_envelope=axl_envelope,
+        raw_confidence=result.raw_confidence,
+        agreement_score=result.agreement_score,
+        minority_report=result.minority_report,
     )
 
 
